@@ -121,6 +121,21 @@ function getInsumosOpciones(categoria, stockData){
   return [...merged, "Otro"];
 }
 
+// Permission helpers based on role
+const ROLES = {
+  ADMIN: "Administrador",
+  EDITOR: "Editor",
+  LECTOR: "Lector",
+};
+const canEdit = rol => rol === ROLES.ADMIN || rol === ROLES.EDITOR;
+const canDelete = rol => rol === ROLES.ADMIN;
+const canManageUsers = rol => rol === ROLES.ADMIN;
+const ROLE_BADGE = {
+  Administrador: {bg:"#dcfce7",c:"#15803d"},
+  Editor: {bg:"#dbeafe",c:"#1d4ed8"},
+  Lector: {bg:"#f3f4f6",c:"#6b7280"},
+};
+
 // ════════════════════════════════════════════════════════════════════════════
 // UI PRIMITIVES
 // ════════════════════════════════════════════════════════════════════════════
@@ -205,6 +220,15 @@ const Toast = ({msg,type})=>msg?(
     boxShadow:"0 4px 20px rgba(0,0,0,0.2)"}}>{msg}</div>
 ):null;
 
+// Role-aware action buttons (visually rendered only if user can do that action)
+// These use a global mutable variable set at runtime by the App component
+let __currentRole = "Administrador";
+const setCurrentRole = r => { __currentRole = r; };
+const EditBtn = (props) => canEdit(__currentRole) ? <Btn variant="ghost" small {...props}><I.edit/></Btn> : null;
+const DelBtn = (props) => canDelete(__currentRole) ? <Btn variant="ghost" small {...props}><I.trash/></Btn> : null;
+const EditOnly = ({children}) => canEdit(__currentRole) ? children : null;
+const AdminOnly = ({children}) => canDelete(__currentRole) ? children : null;
+
 const ConfirmModal = ({msg,onConfirm,onCancel})=>(
   <Modal title="Confirmar" onClose={onCancel}>
     <p style={{marginBottom:20,color:"#374151"}}>{msg}</p>
@@ -238,6 +262,7 @@ function AuthScreen({onAuth}){
   const [mode,setMode]=useState("login");
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
+  const [nombre,setNombre]=useState("");
   const [orgNombre,setOrgNombre]=useState("");
   const [orgInvite,setOrgInvite]=useState("");
   const [signupMode,setSignupMode]=useState("nueva");
@@ -252,6 +277,7 @@ function AuthScreen({onAuth}){
         if(error) throw error;
         onAuth();
       } else {
+        if(!nombre.trim()) throw new Error("Ingresá tu nombre");
         // SIGNUP
         const {data:authData,error:authError} = await sb.auth.signUp({email,password});
         if(authError) throw authError;
@@ -265,14 +291,12 @@ function AuthScreen({onAuth}){
         await new Promise(r=>setTimeout(r,300));
 
         if(signupMode==="nueva"){
-          // Use RPC function to atomically create org + membership
-          const {data:newOrgId,error:rpcErr} = await sb.rpc("create_org_and_join",{org_nombre:orgNombre||"Mi Campo"});
+          const {data:newOrgId,error:rpcErr} = await sb.rpc("create_org_and_join",{org_nombre:orgNombre||"Mi Campo",nombre_user:nombre,email_user:email});
           if(rpcErr) throw new Error("Error creando organización: " + rpcErr.message);
           if(!newOrgId) throw new Error("No se pudo crear la organización");
         } else {
-          // Join existing org by code (org_id)
           if(!orgInvite || orgInvite.length<10) throw new Error("Código de invitación inválido");
-          const {error:joinErr} = await sb.rpc("join_org",{invite_org_id:orgInvite});
+          const {error:joinErr} = await sb.rpc("join_org",{invite_org_id:orgInvite,nombre_user:nombre,email_user:email});
           if(joinErr) throw new Error("Error al unirse: " + joinErr.message);
         }
 
@@ -298,6 +322,7 @@ function AuthScreen({onAuth}){
 
         {mode==="signup"&&(
           <>
+            <Inp label="Tu nombre" value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Ej: Santiago Berardi"/>
             <div style={{display:"flex",gap:8,marginBottom:13}}>
               <button onClick={()=>setSignupMode("nueva")} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid",borderColor:signupMode==="nueva"?"#16a34a":"#e5e7eb",background:signupMode==="nueva"?"#f0fdf4":"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:signupMode==="nueva"?"#16a34a":"#6b7280"}}>Nuevo campo</button>
               <button onClick={()=>setSignupMode("unirse")} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid",borderColor:signupMode==="unirse"?"#16a34a":"#e5e7eb",background:signupMode==="unirse"?"#f0fdf4":"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:signupMode==="unirse"?"#16a34a":"#6b7280"}}>Unirme</button>
@@ -549,7 +574,7 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
               <h2 style={{margin:0,fontSize:22,fontWeight:800}}>{detail.nombre}</h2>
               <div style={{fontSize:14,color:"#6b7280",marginTop:4}}>📍 {detail.ubicacion}</div>
             </div>
-            <Btn variant="secondary" small onClick={()=>setEditItem({...detail})}><I.edit/> Editar campo</Btn>
+            <EditOnly><Btn variant="secondary" small onClick={()=>setEditItem({...detail})}><I.edit/> Editar campo</Btn></EditOnly>
           </div>
           <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:20}}>
             <KPI label="Hectáreas" value={Number(detail.hectareas).toLocaleString("es-AR")}/>
@@ -566,9 +591,9 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
         <div style={{background:"#fff",borderRadius:14,padding:20,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
             <div style={{fontWeight:700,fontSize:16}}>Mapa de lotes</div>
-            <Btn variant="secondary" small onClick={()=>mapaFileRef.current.click()} disabled={uploading}>
+            <EditOnly><Btn variant="secondary" small onClick={()=>mapaFileRef.current.click()} disabled={uploading}>
               <I.upload/> {detail.mapa_url?"Cambiar imagen":"Subir imagen"}
-            </Btn>
+            </Btn></EditOnly>
             <input ref={mapaFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>uploadMapa(e,detail)}/>
           </div>
           {detail.mapa_url
@@ -653,15 +678,15 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
               </div>
               <div style={{display:"flex",gap:6}}>
                 <Btn variant="primary" small style={{flex:1,justifyContent:"center"}} onClick={()=>setDetail(c)}>Ver campo →</Btn>
-                <Btn variant="ghost" small onClick={()=>setEditItem({...c})}><I.edit/></Btn>
-                <Btn variant="ghost" small onClick={()=>setConfirm(c.id)}><I.trash/></Btn>
+                <EditBtn onClick={()=>setEditItem({...c})}/>
+                <DelBtn onClick={()=>setConfirm(c.id)}/>
               </div>
             </div>
           </div>
         ))}
-        <div onClick={()=>setEditItem({...EMPTY})} style={{background:"#f9fafb",borderRadius:14,border:"2px dashed #d1d5db",minHeight:220,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexDirection:"column",gap:8,color:"#9ca3af"}}>
+        {canEdit(__currentRole)&&<div onClick={()=>setEditItem({...EMPTY})} style={{background:"#f9fafb",borderRadius:14,border:"2px dashed #d1d5db",minHeight:220,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexDirection:"column",gap:8,color:"#9ca3af"}}>
           <I.plus/><span style={{fontSize:14,fontWeight:600}}>Agregar campo</span>
-        </div>
+        </div>}
       </div>
 
       {editItem&&!detail&&(
@@ -719,9 +744,9 @@ function LotesMapa({campo,ordenes,campanas,onUpdate}){
   return(
     <div>
       <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-        <Btn variant={adding?"danger":"secondary"} small onClick={()=>setAdding(!adding)}>
+        <EditOnly><Btn variant={adding?"danger":"secondary"} small onClick={()=>setAdding(!adding)}>
           {adding?"Cancelar":"+ Marcar lote"}
-        </Btn>
+        </Btn></EditOnly>
         {adding&&<span style={{fontSize:12,color:"#16a34a",fontWeight:600}}>Click en el mapa donde está el lote</span>}
         <span style={{fontSize:12,color:"#9ca3af"}}>{lotes.length} lote(s) marcado(s)</span>
       </div>
@@ -881,11 +906,11 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                   <td style={{padding:"12px",fontSize:12,color:"#6b7280"}}>{fmtDate(a.fecha)}</td>
                   <td style={{padding:"12px"}}>
                     <div style={{display:"flex",gap:4}}>
-                      <Btn variant="ghost" small onClick={()=>{
+                      <EditBtn onClick={()=>{
                         const razaPredef = RAZAS_PREDEFINIDAS.includes(a.raza);
                         setEditItem({...a,id_real:a.id,raza:razaPredef?a.raza:"Otra",razaCustom:razaPredef?"":a.raza});
-                      }}><I.edit/></Btn>
-                      <Btn variant="ghost" small onClick={()=>setConfirm(a.id)}><I.trash/></Btn>
+                      }}/>
+                      <DelBtn onClick={()=>setConfirm(a.id)}/>
                     </div>
                   </td>
                 </tr>
@@ -1073,9 +1098,9 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
                     <td style={{padding:"12px"}}>
                       <div style={{display:"flex",gap:4}}>
-                        <Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn>
-                        <Btn variant="ghost" small onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}><I.edit/></Btn>
-                        <Btn variant="ghost" small onClick={()=>setConfirm(s.id)}><I.trash/></Btn>
+                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
+                        <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
+                        <DelBtn onClick={()=>setConfirm(s.id)}/>
                       </div>
                     </td>
                   </tr>
@@ -1225,14 +1250,15 @@ function MaquinariaPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                 </div>
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                <div style={{display:"flex",alignItems:"center",gap:6,background:"#f9fafb",borderRadius:8,padding:"4px 8px"}}>
+                <EditOnly><div style={{display:"flex",alignItems:"center",gap:6,background:"#f9fafb",borderRadius:8,padding:"4px 8px"}}>
                   <button onClick={()=>sumarHoras(m,-1)} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:6,width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><I.minus size={12}/></button>
                   <span style={{fontWeight:700,fontSize:13,minWidth:48,textAlign:"center"}}>{m.horas} hs</span>
                   <button onClick={()=>sumarHoras(m,1)} style={{background:"#16a34a",color:"#fff",border:"none",borderRadius:6,width:24,height:24,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}><I.plus size={12}/></button>
-                </div>
-                <Btn variant="secondary" small onClick={()=>setHorasModal({maq:m,monto:"",concepto:""})}>+ Gasto</Btn>
-                <Btn variant="ghost" small onClick={()=>setEditItem({...m})}><I.edit/></Btn>
-                <Btn variant="ghost" small onClick={()=>setConfirm(m.id)}><I.trash/></Btn>
+                </div></EditOnly>
+                {!canEdit(__currentRole)&&<div style={{display:"flex",alignItems:"center",gap:6,background:"#f9fafb",borderRadius:8,padding:"4px 12px"}}><span style={{fontWeight:700,fontSize:13}}>{m.horas} hs</span></div>}
+                <EditOnly><Btn variant="secondary" small onClick={()=>setHorasModal({maq:m,monto:"",concepto:""})}>+ Gasto</Btn></EditOnly>
+                <EditBtn onClick={()=>setEditItem({...m})}/>
+                <DelBtn onClick={()=>setConfirm(m.id)}/>
                 <button onClick={()=>setExpanded(expanded===m.id?null:m.id)} style={{background:"none",border:"none",cursor:"pointer",color:"#6b7280",transform:expanded===m.id?"rotate(180deg)":"none",transition:"transform .2s"}}><I.chevDown/></button>
               </div>
             </div>
@@ -1397,8 +1423,8 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
                   <td style={{padding:"10px 12px",fontSize:13,color:"#6b7280"}}>{l.obs||"—"}</td>
                   <td style={{padding:"10px 12px"}}>
                     <div style={{display:"flex",gap:4}}>
-                      <Btn variant="ghost" small onClick={()=>setEditItem({...l})}><I.edit/></Btn>
-                      <Btn variant="ghost" small onClick={()=>setConfirm(l.id)}><I.trash/></Btn>
+                      <EditBtn onClick={()=>setEditItem({...l})}/>
+                      <DelBtn onClick={()=>setConfirm(l.id)}/>
                     </div>
                   </td>
                 </tr>
@@ -1567,8 +1593,8 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
             <div style={{fontSize:12,color:"#9ca3af",marginBottom:12}}>📅 {fmtDate(c.inicio)} → {c.fin?fmtDate(c.fin):"en curso"}</div>
             <div style={{display:"flex",gap:6}}>
               <Btn variant="primary" small style={{flex:1,justifyContent:"center"}} onClick={()=>setDetail(c)}>📊 Ver detalle</Btn>
-              <Btn variant="ghost" small onClick={()=>setEditItem({...c})}><I.edit/></Btn>
-              <Btn variant="ghost" small onClick={()=>setConfirm(c.id)}><I.trash/></Btn>
+              <EditBtn onClick={()=>setEditItem({...c})}/>
+              <DelBtn onClick={()=>setConfirm(c.id)}/>
             </div>
           </div>
         ))}
@@ -1744,9 +1770,9 @@ function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
               </div>
             )}
             <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-              {o.estado==="Pendiente"&&<Btn variant="primary" small onClick={()=>completarManual(o)}><I.check/> Completar</Btn>}
-              <Btn variant="ghost" small onClick={()=>setEditItem({...o})}><I.edit/></Btn>
-              <Btn variant="ghost" small onClick={()=>setConfirm(o.id)}><I.trash/></Btn>
+              {o.estado==="Pendiente"&&canEdit(__currentRole)&&<Btn variant="primary" small onClick={()=>completarManual(o)}><I.check/> Completar</Btn>}
+              <EditBtn onClick={()=>setEditItem({...o})}/>
+              <DelBtn onClick={()=>setConfirm(o.id)}/>
             </div>
           </div>
           );
@@ -1924,8 +1950,8 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                   <td style={{padding:"10px",fontSize:11,color:"#9ca3af"}}>{f.origen||"manual"}</td>
                   <td style={{padding:"10px"}}>
                     <div style={{display:"flex",gap:4}}>
-                      <Btn variant="ghost" small onClick={()=>setEditItem({...f})}><I.edit/></Btn>
-                      <Btn variant="ghost" small onClick={()=>setConfirm(f.id)}><I.trash/></Btn>
+                      <EditBtn onClick={()=>setEditItem({...f})}/>
+                      <DelBtn onClick={()=>setConfirm(f.id)}/>
                     </div>
                   </td>
                 </tr>
@@ -2013,7 +2039,7 @@ function DocumentosPage({data,orgId,toast,reload}){
       </div>
 
       <div style={{background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
-        <div style={{border:"2px dashed #d1d5db",borderRadius:10,padding:"24px 20px",marginBottom:20,textAlign:"center",color:"#9ca3af"}}>
+        {canEdit(__currentRole)&&<div style={{border:"2px dashed #d1d5db",borderRadius:10,padding:"24px 20px",marginBottom:20,textAlign:"center",color:"#9ca3af"}}>
           <I.upload/>
           <div style={{marginTop:8,fontSize:14}}>
             <span onClick={()=>!uploading&&fileRef.current.click()} style={{color:"#16a34a",cursor:"pointer",fontWeight:600,textDecoration:"underline"}}>
@@ -2027,7 +2053,7 @@ function DocumentosPage({data,orgId,toast,reload}){
             </select>
           </div>
           <input ref={fileRef} type="file" multiple style={{display:"none"}} onChange={handleFiles}/>
-        </div>
+        </div>}
 
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -2047,8 +2073,8 @@ function DocumentosPage({data,orgId,toast,reload}){
                   <td style={{padding:"10px"}}>
                     <div style={{display:"flex",gap:4}}>
                       {d.url&&<a href={d.url} target="_blank" rel="noopener noreferrer" style={{textDecoration:"none"}}><Btn variant="ghost" small><I.eye/></Btn></a>}
-                      <Btn variant="ghost" small onClick={()=>setEditDoc({...d})}><I.edit/></Btn>
-                      <Btn variant="ghost" small onClick={()=>setConfirm(d.id)}><I.trash/></Btn>
+                      <EditBtn onClick={()=>setEditDoc({...d})}/>
+                      <DelBtn onClick={()=>setConfirm(d.id)}/>
                     </div>
                   </td>
                 </tr>
@@ -2078,92 +2104,125 @@ function DocumentosPage({data,orgId,toast,reload}){
 // Add eye icon ref
 I.eye = () => <Ic d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8zM12 9a3 3 0 100 6 3 3 0 000-6"/>;
 
-// ── COLABORADORES ───────────────────────────────────────────────────────────
-function ColaboradoresPage({data,orgId,toast,reload,modalReq,clearModal}){
-  const EMPTY={nombre:"",rol:"Encargado de campo",email:"",telefono:""};
-  const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
-  const [showInvite,setShowInvite]=useState(false);
+// ── COLABORADORES (= MIEMBROS REALES CON ACCESO) ─────────────────────────────
+function ColaboradoresPage({data,orgId,toast,reload,miRol,miMiembroId}){
+  const [editMiembro,setEditMiembro]=useState(null);
+  const [confirm,setConfirm]=useState(null);
+  const esAdmin = canManageUsers(miRol);
 
-  const save = async ()=>{
-    if(!editItem.nombre){toast("Faltan campos","error");return;}
-    const row={nombre:editItem.nombre,rol:editItem.rol,email:editItem.email,telefono:editItem.telefono};
-    if(editItem.id){
-      const {error}=await sb.from("colaboradores").update(row).eq("id",editItem.id);
-      if(error){toast(error.message,"error");return;}
-      toast("Colaborador actualizado");
-    } else {
-      const {error}=await sb.from("colaboradores").insert({...row,org_id:orgId});
-      if(error){toast(error.message,"error");return;}
-      toast("Colaborador agregado");
-    }
-    setEditItem(null); reload();
+  const miembros = data.miembros||[];
+
+  const saveRol = async ()=>{
+    if(!editMiembro) return;
+    await sb.from("miembros").update({rol:editMiembro.rol,nombre:editMiembro.nombre,telefono:editMiembro.telefono}).eq("id",editMiembro.id);
+    toast("Colaborador actualizado");
+    setEditMiembro(null); reload();
   };
 
-  const del = async id=>{
-    const {error}=await sb.from("colaboradores").delete().eq("id",id);
-    if(error){toast(error.message,"error");return;}
-    setConfirm(null); toast("Colaborador eliminado"); reload();
+  const quitarAcceso = async id=>{
+    if(id===miMiembroId){toast("No podés quitarte el acceso a vos mismo","error");return;}
+    await sb.from("miembros").delete().eq("id",id);
+    toast("Acceso revocado"); setConfirm(null); reload();
+  };
+
+  const copiarCodigo = ()=>{
+    navigator.clipboard.writeText(orgId);
+    toast("Código copiado");
   };
 
   return(
     <div>
       <div style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:14,padding:20,marginBottom:20}}>
         <div style={{fontWeight:700,marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
-          <I.users/> Invitar a tu papá o a otros usuarios
+          <I.users/> Invitar a tu papá u otros usuarios
         </div>
         <div style={{fontSize:13,color:"#374151",marginBottom:12}}>
-          Para que otra persona acceda y edite los mismos datos que vos, compartile este <b>código de invitación</b>:
+          Compartí este <b>código de invitación</b>. Las personas que se registren con este código entrarán como <b>Lectores</b> por defecto. Después podés cambiarles el rol desde acá.
         </div>
-        <div style={{background:"#fff",padding:"10px 14px",borderRadius:8,fontFamily:"monospace",fontSize:13,wordBreak:"break-all",border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:10}}>
+        <div style={{background:"#fff",padding:"10px 14px",borderRadius:8,fontFamily:"monospace",fontSize:12,wordBreak:"break-all",border:"1px solid #e5e7eb",display:"flex",alignItems:"center",gap:10}}>
           <span style={{flex:1}}>{orgId}</span>
-          <Btn variant="secondary" small onClick={()=>{navigator.clipboard.writeText(orgId);toast("Copiado");}}>Copiar</Btn>
-        </div>
-        <div style={{fontSize:12,color:"#6b7280",marginTop:10}}>
-          Cuando se registren, deben elegir "Unirme" y pegar este código.
+          <Btn variant="secondary" small onClick={copiarCodigo}>Copiar</Btn>
         </div>
       </div>
 
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label="Total" value={data.colaboradores.length} icon={<I.users/>}/>
+        <KPI label="Total miembros" value={miembros.length} icon={<I.users/>}/>
+        <KPI label="Administradores" value={miembros.filter(m=>m.rol===ROLES.ADMIN).length} color="#15803d"/>
+        <KPI label="Editores" value={miembros.filter(m=>m.rol===ROLES.EDITOR).length} color="#1d4ed8"/>
+        <KPI label="Lectores" value={miembros.filter(m=>m.rol===ROLES.LECTOR).length} color="#6b7280"/>
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:16}}>
-        {data.colaboradores.map(c=>(
-          <div key={c.id} style={{background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
-            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:14}}>
-              <div style={{width:48,height:48,borderRadius:"50%",background:"#16a34a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:18,flexShrink:0}}>
-                {c.nombre?.split(" ").map(n=>n[0]).join("").slice(0,2)}
-              </div>
-              <div>
-                <div style={{fontWeight:700,fontSize:15}}>{c.nombre}</div>
-                <Badge label={c.rol}/>
-              </div>
+      <div style={{background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+        <div style={{fontWeight:700,marginBottom:14,fontSize:15}}>Personas con acceso</div>
+        {miembros.length===0
+          ? <div style={{textAlign:"center",padding:"30px 0",color:"#9ca3af",fontSize:14}}>No hay miembros aún</div>
+          : <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(280px,1fr))",gap:14}}>
+              {miembros.map(m=>{
+                const esYo = m.id===miMiembroId;
+                const rb = ROLE_BADGE[m.rol]||{};
+                return(
+                  <div key={m.id} style={{background:"#f9fafb",borderRadius:12,padding:16,border:esYo?"2px solid #16a34a":"1px solid #e5e7eb"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+                      <div style={{width:42,height:42,borderRadius:"50%",background:"#16a34a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:16,flexShrink:0}}>
+                        {(m.nombre||m.email||"?")[0].toUpperCase()}
+                      </div>
+                      <div style={{minWidth:0,flex:1}}>
+                        <div style={{fontWeight:700,fontSize:14,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          {m.nombre||"Sin nombre"}{esYo&&<span style={{fontSize:11,color:"#16a34a",marginLeft:6}}>(vos)</span>}
+                        </div>
+                        <div style={{fontSize:12,color:"#6b7280",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{m.email}</div>
+                      </div>
+                    </div>
+                    <div style={{marginBottom:10}}><Badge label={m.rol||"Lector"} bg={rb.bg} c={rb.c}/></div>
+                    {m.telefono&&<div style={{fontSize:12,color:"#6b7280",marginBottom:10}}>📱 {m.telefono}</div>}
+                    {esAdmin&&!esYo&&(
+                      <div style={{display:"flex",gap:6}}>
+                        <Btn variant="secondary" small onClick={()=>setEditMiembro({...m})}><I.edit/> Cambiar rol</Btn>
+                        <DelBtn onClick={()=>setConfirm(m.id)}/>
+                      </div>
+                    )}
+                    {esYo&&(
+                      <div style={{fontSize:11,color:"#9ca3af",fontStyle:"italic"}}>Sos vos — no podés cambiar tu propio rol</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            <div style={{fontSize:13,color:"#6b7280",marginBottom:4}}>✉️ {c.email}</div>
-            <div style={{fontSize:13,color:"#6b7280",marginBottom:14}}>📱 {c.telefono}</div>
-            <div style={{display:"flex",gap:8,justifyContent:"flex-end"}}>
-              <Btn variant="ghost" small onClick={()=>setEditItem({...c})}><I.edit/></Btn>
-              <Btn variant="ghost" small onClick={()=>setConfirm(c.id)}><I.trash/></Btn>
-            </div>
+        }
+      </div>
+
+      {!esAdmin&&(
+        <div style={{marginTop:20,background:"#fef9c3",border:"1px solid #fde68a",borderRadius:10,padding:14,fontSize:13,color:"#92400e"}}>
+          ⚠️ Solo los Administradores pueden cambiar roles o quitar miembros.
+        </div>
+      )}
+
+      {editMiembro&&(
+        <Modal title="Editar colaborador" onClose={()=>setEditMiembro(null)}>
+          <Inp label="Nombre" value={editMiembro.nombre||""} onChange={e=>setEditMiembro({...editMiembro,nombre:e.target.value})}/>
+          <div style={{marginBottom:13}}>
+            <label style={{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}}>Email</label>
+            <div style={{padding:"9px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#f9fafb",color:"#6b7280"}}>{editMiembro.email}</div>
           </div>
-        ))}
-      </div>
-
-      {editItem&&(
-        <Modal title={editItem.id?"Editar Colaborador":"Agregar Colaborador"} onClose={()=>setEditItem(null)}>
-          <Inp label="Nombre completo" value={editItem.nombre} onChange={e=>setEditItem({...editItem,nombre:e.target.value})}/>
-          <Sel label="Rol" value={editItem.rol} onChange={e=>setEditItem({...editItem,rol:e.target.value})}>
-            {["Administrador","Encargado de campo","Peón","Solo lectura"].map(r=><option key={r}>{r}</option>)}
+          <Inp label="Teléfono" value={editMiembro.telefono||""} onChange={e=>setEditMiembro({...editMiembro,telefono:e.target.value})}/>
+          <Sel label="Rol" value={editMiembro.rol||"Lector"} onChange={e=>setEditMiembro({...editMiembro,rol:e.target.value})}>
+            <option value="Administrador">Administrador (todo)</option>
+            <option value="Editor">Editor (carga y edita, no borra)</option>
+            <option value="Lector">Lector (solo ve)</option>
           </Sel>
-          <Inp label="Email" type="email" value={editItem.email} onChange={e=>setEditItem({...editItem,email:e.target.value})}/>
-          <Inp label="Teléfono" value={editItem.telefono} onChange={e=>setEditItem({...editItem,telefono:e.target.value})}/>
+          <div style={{background:"#f9fafb",borderRadius:8,padding:"10px 14px",fontSize:12,color:"#6b7280",marginBottom:14}}>
+            <b>Permisos por rol:</b><br/>
+            • <b>Administrador</b>: todo incluido borrar y gestionar usuarios<br/>
+            • <b>Editor</b>: puede cargar y editar pero no borrar<br/>
+            • <b>Lector</b>: solo ve los datos
+          </div>
           <div style={{display:"flex",gap:10,marginTop:8}}>
-            <Btn variant="secondary" onClick={()=>setEditItem(null)} full>Cancelar</Btn>
-            <Btn variant="primary" onClick={save} full><I.save/> Guardar</Btn>
+            <Btn variant="secondary" onClick={()=>setEditMiembro(null)} full>Cancelar</Btn>
+            <Btn variant="primary" onClick={saveRol} full><I.save/> Guardar</Btn>
           </div>
         </Modal>
       )}
-      {confirm&&<ConfirmModal msg="¿Eliminar este colaborador?" onConfirm={()=>del(confirm)} onCancel={()=>setConfirm(null)}/>}
+      {confirm&&<ConfirmModal msg="¿Quitar el acceso a este colaborador? Ya no podrá entrar a la app." onConfirm={()=>quitarAcceso(confirm)} onCancel={()=>setConfirm(null)}/>}
     </div>
   );
 }
@@ -2229,14 +2288,15 @@ const NAV=[
 ];
 const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",colaboradores:"Colaboradores",config:"Configuración"};
 
-const TopActions=({page,onAction})=>{
+const TopActions=({page,onAction,miRol})=>{
   const map={
     campos:"Agregar Campo",animales:"Nuevo Rodeo",campanas:"Nueva Campaña",
     stock:"Agregar Insumo",maquinaria:"Agregar Maquinaria",lluvias:"Registrar Lluvia",
-    ordenes:"Nueva Orden",colaboradores:"Agregar Colaborador",finanzas:"Nuevo Egreso",
+    ordenes:"Nueva Orden",finanzas:"Nuevo Egreso",
   };
   const label=map[page];
   if(!label) return null;
+  if(!canEdit(miRol)) return null;
   return <Btn variant="primary" onClick={()=>onAction({preset:{}})}><I.plus/> {label}</Btn>;
 };
 
@@ -2244,8 +2304,10 @@ export default function App(){
   const [session,setSession]=useState(null);
   const [user,setUser]=useState(null);
   const [orgId,setOrgId]=useState(null);
+  const [miRol,setMiRol]=useState(null);
+  const [miMiembroId,setMiMiembroId]=useState(null);
   const [loadingAuth,setLoadingAuth]=useState(true);
-  const [data,setData]=useState({campos:[],stock:[],animales:[],campanas:[],maquinaria:[],lluvias:[],finanzas:[],ordenes:[],documentos:[],colaboradores:[]});
+  const [data,setData]=useState({campos:[],stock:[],animales:[],campanas:[],maquinaria:[],lluvias:[],finanzas:[],ordenes:[],documentos:[],colaboradores:[],miembros:[],notificaciones:[]});
   const [dolar,setDolar]=useState(1420);
   const [page,setPage]=useState("resumen");
   const [sidebarOpen,setSidebarOpen]=useState(true);
@@ -2271,15 +2333,19 @@ export default function App(){
   useEffect(()=>{
     if(!user) return;
     (async ()=>{
-      const {data:mem}=await sb.from("miembros").select("org_id").eq("user_id",user.id).limit(1).maybeSingle();
-      if(mem) setOrgId(mem.org_id);
+      const {data:mem}=await sb.from("miembros").select("id,org_id,rol").eq("user_id",user.id).limit(1).maybeSingle();
+      if(mem){
+        setOrgId(mem.org_id);
+        setMiRol(mem.rol);
+        setMiMiembroId(mem.id);
+      }
     })();
   },[user]);
 
   // LOAD DATA
   const reload = useCallback(async ()=>{
     if(!orgId) return;
-    const tables = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores"];
+    const tables = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores","miembros","notificaciones"];
     const results = await Promise.all(tables.map(t=>sb.from(t).select("*").eq("org_id",orgId)));
     const newData = {};
     tables.forEach((t,i)=>{newData[t]=results[i].data||[];});
@@ -2337,11 +2403,19 @@ export default function App(){
   };
 
   // Notifications
+  const notifsBD = (data.notificaciones||[]).filter(n=>!n.leida).map(n=>({tipo:n.tipo==="nuevo_miembro"?"info":"warn",msg:n.mensaje,page:"colaboradores",id:n.id}));
   const notifs = [
+    ...notifsBD,
     ...data.stock.filter(s=>Number(s.cantidad)<Number(s.minimo)).map(s=>({tipo:"warn",msg:`Stock bajo: ${s.nombre} (${s.cantidad} ${s.unidad})`,page:"stock"})),
     ...data.ordenes.filter(o=>o.estado==="Pendiente"&&o.fecha&&o.fecha<=todayISO()).map(o=>({tipo:"warn",msg:`Orden vencida: ${o.titulo}`,page:"ordenes"})),
     ...data.ordenes.filter(o=>{if(o.estado!=="Pendiente"||!o.fecha)return false;const d=new Date(o.fecha);const h=new Date();const diff=(d-h)/(1000*60*60*24);return diff>0&&diff<=3;}).map(o=>({tipo:"info",msg:`Próxima: ${o.titulo} (${fmtDate(o.fecha)})`,page:"ordenes"})),
   ];
+
+  const marcarNotifLeida = async (id)=>{
+    if(!id) return;
+    await sb.from("notificaciones").update({leida:true}).eq("id",id);
+    reload();
+  };
 
   if(loadingAuth) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Spinner/></div>;
   if(!session) return <AuthScreen onAuth={()=>window.location.reload()}/>;
@@ -2351,7 +2425,8 @@ export default function App(){
     <Btn variant="ghost" small onClick={onLogout}>Cerrar sesión</Btn>
   </div>;
 
-  const props={data,orgId,toast,reload,modalReq,clearModal,dolar,setPage};
+  const props={data,orgId,toast,reload,modalReq,clearModal,dolar,setPage,miRol,miMiembroId,user};
+  setCurrentRole(miRol||"Lector");
   const PAGES={
     resumen:<ResumenPage {...props}/>,
     campos:<CamposPage {...props}/>,
@@ -2405,6 +2480,7 @@ export default function App(){
             <div style={{width:32,height:32,borderRadius:"50%",background:"#16a34a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:13,flexShrink:0}}>{user?.email?.[0]?.toUpperCase()}</div>
             <div style={{minWidth:0,flex:1}}>
               <div style={{fontSize:12,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user?.email}</div>
+              <div style={{fontSize:10,color:"#16a34a",fontWeight:600}}>{miRol||"Cargando..."}</div>
             </div>
           </div>}
           <button onClick={()=>setSidebarOpen(o=>!o)} style={{width:"100%",padding:"7px",borderRadius:8,border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:"#6b7280",fontSize:12}}>
@@ -2417,21 +2493,24 @@ export default function App(){
         <div style={{background:"#fff",borderBottom:"1px solid #e5e7eb",padding:"0 24px",height:58,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,gap:8}}>
           <h1 style={{fontSize:18,fontWeight:800}}>{TITLES[page]}</h1>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
-            <TopActions page={page} onAction={handleAction}/>
+            <TopActions page={page} onAction={handleAction} miRol={miRol}/>
             <div style={{position:"relative"}}>
               <button onClick={()=>setNotifOpen(!notifOpen)} style={{background:"none",border:"none",cursor:"pointer",color:"#6b7280",position:"relative"}}>
                 <I.bell/>
                 {notifs.length>0&&<div style={{position:"absolute",top:-2,right:-2,minWidth:14,height:14,padding:"0 3px",background:"#ef4444",borderRadius:7,color:"#fff",fontSize:9,fontWeight:800,display:"flex",alignItems:"center",justifyContent:"center"}}>{notifs.length}</div>}
               </button>
               {notifOpen&&(
-                <div style={{position:"absolute",right:0,top:32,width:320,maxHeight:400,overflowY:"auto",background:"#fff",borderRadius:10,boxShadow:"0 8px 30px rgba(0,0,0,0.15)",border:"1px solid #e5e7eb",zIndex:100}}>
-                  <div style={{padding:14,borderBottom:"1px solid #f3f4f6",fontWeight:700}}>Notificaciones</div>
+                <div style={{position:"absolute",right:0,top:32,width:340,maxHeight:420,overflowY:"auto",background:"#fff",borderRadius:10,boxShadow:"0 8px 30px rgba(0,0,0,0.15)",border:"1px solid #e5e7eb",zIndex:100}}>
+                  <div style={{padding:14,borderBottom:"1px solid #f3f4f6",fontWeight:700,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span>Notificaciones</span>
+                    {notifs.length>0&&<span style={{fontSize:11,color:"#6b7280",fontWeight:500}}>{notifs.length}</span>}
+                  </div>
                   {notifs.length===0
                     ?<div style={{padding:24,textAlign:"center",color:"#9ca3af",fontSize:13}}>No hay notificaciones</div>
                     :notifs.map((n,i)=>(
-                      <div key={i} onClick={()=>{setPage(n.page);setNotifOpen(false);}} style={{padding:"10px 14px",borderBottom:"1px solid #f3f4f6",cursor:"pointer",display:"flex",alignItems:"center",gap:10}}>
-                        <I.warn/>
-                        <span style={{fontSize:13}}>{n.msg}</span>
+                      <div key={i} onClick={()=>{setPage(n.page);setNotifOpen(false);if(n.id)marcarNotifLeida(n.id);}} style={{padding:"10px 14px",borderBottom:"1px solid #f3f4f6",cursor:"pointer",display:"flex",alignItems:"center",gap:10}}>
+                        <span style={{fontSize:16}}>{n.tipo==="info"?"👤":"⚠️"}</span>
+                        <span style={{fontSize:13,flex:1}}>{n.msg}</span>
                       </div>
                     ))
                   }
@@ -2440,7 +2519,15 @@ export default function App(){
             </div>
           </div>
         </div>
-        <div style={{flex:1,overflowY:"auto",padding:24}}>{PAGES[page]}</div>
+        <div style={{flex:1,overflowY:"auto",padding:24}}>
+          {miRol===ROLES.LECTOR&&(
+            <div style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#92400e",display:"flex",alignItems:"center",gap:8}}>
+              👁️ Estás en modo <b>Lector</b>: podés ver todo pero no editar. Si necesitás cargar datos, pedile al administrador que te cambie el rol.
+            </div>
+          )}
+          {miRol===ROLES.EDITOR&&page===page&&false}
+          {PAGES[page]}
+        </div>
       </div>
 
       <Toast msg={toastMsg?.msg} type={toastMsg?.type}/>
