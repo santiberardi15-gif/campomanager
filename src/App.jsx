@@ -710,102 +710,742 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
   );
 }
 
-// ── MAPA DE LOTES INTERACTIVO ───────────────────────────────────────────────
-function LotesMapa({campo,ordenes,campanas,onUpdate}){
-  const [adding,setAdding]=useState(false);
-  const [selected,setSelected]=useState(null);
-  const [editLote,setEditLote]=useState(null);
-  const imgRef=useRef();
+// ══════════════════════════════════════════════════════════════════════════
+// INSTRUCCIONES DE INSTALACIÓN
+// ══════════════════════════════════════════════════════════════════════════
+// 1. Ir a https://aistudio.google.com/app/apikey
+//    → Crear API key GRATIS (no requiere tarjeta de crédito)
+//
+// 2. En Vercel → tu proyecto → Settings → Environment Variables
+//    → Agregar: VITE_GEMINI_API_KEY = (tu key)
+//    → Hacer redeploy
+//
+// 3. En tu App.jsx, REEMPLAZÁ la función LotesMapa COMPLETA
+//    (desde "function LotesMapa" hasta el cierre de su "}" final)
+//    por el código de abajo.
+// ══════════════════════════════════════════════════════════════════════════
 
-  const lotes = campo.lotes_data||[];
+// ── MAPA DE LOTES INTERACTIVO con detección IA ─────────────────────────────
+function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
+  const [adding, setAdding] = useState(false);
+  const [selected, setSelected] = useState(null);
+  const [editLote, setEditLote] = useState(null);
+  const imgRef = useRef();
 
-  const handleImgClick = e=>{
-    if(!adding) return;
+  // ── Estado para el flujo de IA ──────────────────────────────────────────
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [aiPreview, setAiPreview] = useState(null); // lotes detectados antes de confirmar
+  const [editPreview, setEditPreview] = useState(null); // lote en edición dentro del preview
+
+  const lotes = campo.lotes_data || [];
+
+  // ── Click en el mapa para agregar lote manual ───────────────────────────
+  const handleImgClick = (e) => {
+    if (!adding) return;
     const rect = imgRef.current.getBoundingClientRect();
-    const x = ((e.clientX-rect.left)/rect.width)*100;
-    const y = ((e.clientY-rect.top)/rect.height)*100;
-    const num = lotes.length+1;
-    const nuevo = {id:Date.now(),numero:num,x,y,nombre:`Lote ${num}`,cultivo:"",hectareas:""};
-    onUpdate([...lotes,nuevo]);
+    const x = ((e.clientX - rect.left) / rect.width) * 100;
+    const y = ((e.clientY - rect.top) / rect.height) * 100;
+    const num = lotes.length + 1;
+    const nuevo = {
+      id: Date.now(),
+      numero: num,
+      x,
+      y,
+      nombre: `Lote ${num}`,
+      cultivo: "",
+      hectareas: "",
+    };
+    onUpdate([...lotes, nuevo]);
     setAdding(false);
   };
 
-  const delLote = id=>{
-    onUpdate(lotes.filter(l=>l.id!==id));
+  const delLote = (id) => {
+    onUpdate(lotes.filter((l) => l.id !== id));
     setSelected(null);
   };
 
-  const saveLote = ()=>{
-    onUpdate(lotes.map(l=>l.id===editLote.id?editLote:l));
+  const saveLote = () => {
+    onUpdate(lotes.map((l) => (l.id === editLote.id ? editLote : l)));
     setEditLote(null);
     setSelected(null);
   };
 
-  return(
+  // ── Detección de lotes con Google Gemini ────────────────────────────────
+  const detectarLotesConIA = async () => {
+    setAiError("");
+    setAiLoading(true);
+
+    try {
+      // 1. Obtener la imagen del mapa como base64
+      const response = await fetch(campo.mapa_url);
+      const blob = await response.blob();
+      const base64 = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result.split(",")[1]);
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+      const mimeType = blob.type || "image/jpeg";
+
+      // 2. Llamar a Gemini Vision (modelo flash gratuito)
+      const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY;
+      if (!GEMINI_KEY) {
+        throw new Error(
+          "Falta la variable de entorno VITE_GEMINI_API_KEY. Configurala en Vercel."
+        );
+      }
+
+      const prompt = `Analizá esta imagen de un plano o mapa de un campo agropecuario.
+Identificá todos los lotes, potreros o parcelas que puedas ver.
+Para cada lote, leé el nombre o número que aparece escrito dentro de él.
+Si hay hectáreas escritas, incluilas también.
+Estimá la posición aproximada del centro de cada lote como porcentaje (0-100) 
+del ancho (x) y alto (y) de la imagen.
+
+Respondé SOLO con un JSON válido, sin texto adicional, sin markdown, sin bloques de código.
+El JSON debe tener este formato exacto:
+{
+  "lotes": [
+    {"nombre": "nombre o número del lote", "hectareas": 50, "x": 25.5, "y": 30.2},
+    ...
+  ]
+}
+
+Si no podés determinar las hectáreas de algún lote, usá null.
+Si el nombre no está claro, usá "Lote N" donde N es un número secuencial.
+Ordená los lotes de izquierda a derecha, de arriba a abajo.`;
+
+      const geminiRes = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_KEY}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  {
+                    inline_data: {
+                      mime_type: mimeType,
+                      data: base64,
+                    },
+                  },
+                ],
+              },
+            ],
+            generationConfig: {
+              temperature: 0.1,
+              maxOutputTokens: 2048,
+            },
+          }),
+        }
+      );
+
+      if (!geminiRes.ok) {
+        const errData = await geminiRes.json();
+        throw new Error(
+          errData?.error?.message || `Error de Gemini: ${geminiRes.status}`
+        );
+      }
+
+      const geminiData = await geminiRes.json();
+      const rawText =
+        geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+      // 3. Parsear el JSON de respuesta
+      // Limpiar posibles bloques de código que Gemini a veces agrega igual
+      const cleaned = rawText
+        .replace(/```json/g, "")
+        .replace(/```/g, "")
+        .trim();
+
+      let parsed;
+      try {
+        parsed = JSON.parse(cleaned);
+      } catch {
+        throw new Error(
+          "Gemini no devolvió JSON válido. Intentá de nuevo o subí una imagen más clara."
+        );
+      }
+
+      if (!parsed.lotes || !Array.isArray(parsed.lotes)) {
+        throw new Error("La respuesta de Gemini no tiene el formato esperado.");
+      }
+
+      // 4. Construir los lotes con IDs únicos y números secuenciales
+      const lotesDetectados = parsed.lotes.map((l, idx) => ({
+        id: Date.now() + idx,
+        numero: idx + 1,
+        nombre: l.nombre || `Lote ${idx + 1}`,
+        hectareas: l.hectareas != null ? String(l.hectareas) : "",
+        cultivo: "",
+        x: Math.min(95, Math.max(5, Number(l.x) || 50)),
+        y: Math.min(95, Math.max(5, Number(l.y) || 50)),
+      }));
+
+      setAiPreview(lotesDetectados);
+    } catch (err) {
+      setAiError(err.message || "Error desconocido al llamar a Gemini.");
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  // ── Confirmar los lotes del preview (reemplaza o agrega) ────────────────
+  const confirmarPreview = () => {
+    onUpdate(aiPreview);
+    setAiPreview(null);
+  };
+
+  const descartarPreview = () => {
+    setAiPreview(null);
+    setAiError("");
+  };
+
+  // ── Editar un lote dentro del preview ──────────────────────────────────
+  const saveEditPreview = () => {
+    setAiPreview((prev) =>
+      prev.map((l) => (l.id === editPreview.id ? editPreview : l))
+    );
+    setEditPreview(null);
+  };
+
+  const delPreviewLote = (id) => {
+    setAiPreview((prev) => {
+      const filtered = prev.filter((l) => l.id !== id);
+      // Renumerar
+      return filtered.map((l, idx) => ({ ...l, numero: idx + 1 }));
+    });
+  };
+
+  // ── Render ──────────────────────────────────────────────────────────────
+  return (
     <div>
-      <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-        <EditOnly><Btn variant={adding?"danger":"secondary"} small onClick={()=>setAdding(!adding)}>
-          {adding?"Cancelar":"+ Marcar lote"}
-        </Btn></EditOnly>
-        {adding&&<span style={{fontSize:12,color:"#16a34a",fontWeight:600}}>Click en el mapa donde está el lote</span>}
-        <span style={{fontSize:12,color:"#9ca3af"}}>{lotes.length} lote(s) marcado(s)</span>
+      {/* Barra de acciones */}
+      <div
+        style={{
+          marginBottom: 14,
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          flexWrap: "wrap",
+        }}
+      >
+        <EditOnly>
+          <Btn
+            variant={adding ? "danger" : "secondary"}
+            small
+            onClick={() => setAdding(!adding)}
+          >
+            {adding ? "Cancelar" : "+ Marcar lote"}
+          </Btn>
+        </EditOnly>
+
+        {/* Botón de IA */}
+        <EditOnly>
+          <Btn
+            variant="primary"
+            small
+            onClick={detectarLotesConIA}
+            disabled={aiLoading}
+            style={{ background: aiLoading ? "#6b7280" : "#7c3aed" }}
+          >
+            {aiLoading ? (
+              <>
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 12,
+                    height: 12,
+                    border: "2px solid #fff",
+                    borderTop: "2px solid transparent",
+                    borderRadius: "50%",
+                    animation: "spin 1s linear infinite",
+                    marginRight: 4,
+                  }}
+                />
+                Analizando imagen...
+              </>
+            ) : (
+              <>🤖 Detectar lotes con IA</>
+            )}
+          </Btn>
+        </EditOnly>
+
+        {adding && (
+          <span style={{ fontSize: 12, color: "#16a34a", fontWeight: 600 }}>
+            Click en el mapa donde está el lote
+          </span>
+        )}
+        <span style={{ fontSize: 12, color: "#9ca3af" }}>
+          {lotes.length} lote(s) marcado(s)
+        </span>
       </div>
-      <div style={{position:"relative",display:"inline-block",width:"100%"}}>
-        <img ref={imgRef} src={campo.mapa_url} alt="mapa" onClick={handleImgClick}
-          style={{width:"100%",maxHeight:500,objectFit:"contain",borderRadius:10,cursor:adding?"crosshair":"default",display:"block"}}/>
-        {lotes.map(l=>(
-          <div key={l.id} onClick={()=>setSelected(l)} style={{
-            position:"absolute",left:`${l.x}%`,top:`${l.y}%`,transform:"translate(-50%,-50%)",
-            width:32,height:32,borderRadius:"50%",background:"#16a34a",color:"#fff",
-            display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800,fontSize:13,
-            cursor:"pointer",border:"3px solid #fff",boxShadow:"0 2px 8px rgba(0,0,0,0.3)"
-          }}>{l.numero}</div>
+
+      {/* Error de IA */}
+      {aiError && (
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            borderRadius: 8,
+            padding: "10px 14px",
+            marginBottom: 12,
+            fontSize: 13,
+            color: "#dc2626",
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 8,
+          }}
+        >
+          <span>⚠️</span>
+          <span>{aiError}</span>
+        </div>
+      )}
+
+      {/* ── PREVIEW DE LOTES DETECTADOS POR IA ── */}
+      {aiPreview && (
+        <div
+          style={{
+            background: "#f5f3ff",
+            border: "2px solid #7c3aed",
+            borderRadius: 12,
+            padding: 20,
+            marginBottom: 16,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 14,
+              flexWrap: "wrap",
+              gap: 10,
+            }}
+          >
+            <div>
+              <div
+                style={{ fontWeight: 700, fontSize: 15, color: "#5b21b6" }}
+              >
+                🤖 Gemini detectó {aiPreview.length} lote(s)
+              </div>
+              <div style={{ fontSize: 12, color: "#7c3aed", marginTop: 2 }}>
+                Revisá y editá antes de confirmar. Podés corregir nombres,
+                hectáreas o eliminar los que estén mal.
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <Btn variant="secondary" small onClick={descartarPreview}>
+                Descartar
+              </Btn>
+              <Btn
+                variant="primary"
+                small
+                onClick={confirmarPreview}
+                style={{ background: "#7c3aed" }}
+              >
+                ✓ Confirmar y guardar
+              </Btn>
+            </div>
+          </div>
+
+          {/* Tabla editable de preview */}
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #ddd6fe" }}>
+                  {["#", "Nombre", "Hectáreas", "Pos. X%", "Pos. Y%", ""].map(
+                    (h) => (
+                      <th
+                        key={h}
+                        style={{
+                          textAlign: "left",
+                          padding: "8px 10px",
+                          fontSize: 12,
+                          fontWeight: 700,
+                          color: "#5b21b6",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {h}
+                      </th>
+                    )
+                  )}
+                </tr>
+              </thead>
+              <tbody>
+                {aiPreview.map((l, idx) => (
+                  <tr
+                    key={l.id}
+                    style={{
+                      borderBottom: "1px solid #ede9fe",
+                      background: idx % 2 === 0 ? "#faf5ff" : "#f5f3ff",
+                    }}
+                  >
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        fontWeight: 700,
+                        color: "#7c3aed",
+                      }}
+                    >
+                      {l.numero}
+                    </td>
+                    <td style={{ padding: "8px 10px", fontSize: 13 }}>
+                      {l.nombre}
+                    </td>
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        fontSize: 13,
+                        color: l.hectareas ? "#111" : "#9ca3af",
+                      }}
+                    >
+                      {l.hectareas ? `${l.hectareas} ha` : "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        fontSize: 12,
+                        color: "#6b7280",
+                      }}
+                    >
+                      {Number(l.x).toFixed(1)}%
+                    </td>
+                    <td
+                      style={{
+                        padding: "8px 10px",
+                        fontSize: 12,
+                        color: "#6b7280",
+                      }}
+                    >
+                      {Number(l.y).toFixed(1)}%
+                    </td>
+                    <td style={{ padding: "8px 10px" }}>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <Btn
+                          variant="ghost"
+                          small
+                          onClick={() => setEditPreview({ ...l })}
+                        >
+                          <I.edit />
+                        </Btn>
+                        <Btn
+                          variant="ghost"
+                          small
+                          onClick={() => delPreviewLote(l.id)}
+                        >
+                          <I.trash />
+                        </Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Preview visual sobre la imagen */}
+          <div
+            style={{
+              marginTop: 14,
+              position: "relative",
+              display: "inline-block",
+              width: "100%",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 11,
+                color: "#7c3aed",
+                fontWeight: 600,
+                marginBottom: 6,
+              }}
+            >
+              Vista previa de posiciones detectadas:
+            </div>
+            <div style={{ position: "relative" }}>
+              <img
+                src={campo.mapa_url}
+                alt="preview"
+                style={{
+                  width: "100%",
+                  maxHeight: 350,
+                  objectFit: "contain",
+                  borderRadius: 8,
+                  display: "block",
+                  opacity: 0.85,
+                }}
+              />
+              {aiPreview.map((l) => (
+                <div
+                  key={l.id}
+                  style={{
+                    position: "absolute",
+                    left: `${l.x}%`,
+                    top: `${l.y}%`,
+                    transform: "translate(-50%, -50%)",
+                    width: 30,
+                    height: 30,
+                    borderRadius: "50%",
+                    background: "#7c3aed",
+                    color: "#fff",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontWeight: 800,
+                    fontSize: 11,
+                    border: "2px solid #fff",
+                    boxShadow: "0 2px 8px rgba(124,58,237,0.5)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  {l.numero}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MAPA PRINCIPAL CON LOTES GUARDADOS ── */}
+      <div
+        style={{ position: "relative", display: "inline-block", width: "100%" }}
+      >
+        <img
+          ref={imgRef}
+          src={campo.mapa_url}
+          alt="mapa"
+          onClick={handleImgClick}
+          style={{
+            width: "100%",
+            maxHeight: 500,
+            objectFit: "contain",
+            borderRadius: 10,
+            cursor: adding ? "crosshair" : "default",
+            display: "block",
+          }}
+        />
+        {lotes.map((l) => (
+          <div
+            key={l.id}
+            onClick={() => setSelected(l)}
+            style={{
+              position: "absolute",
+              left: `${l.x}%`,
+              top: `${l.y}%`,
+              transform: "translate(-50%,-50%)",
+              width: 32,
+              height: 32,
+              borderRadius: "50%",
+              background: "#16a34a",
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontWeight: 800,
+              fontSize: 13,
+              cursor: "pointer",
+              border: "3px solid #fff",
+              boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
+            }}
+          >
+            {l.numero}
+          </div>
         ))}
       </div>
 
-      {selected&&(
-        <Modal title={`Lote ${selected.numero} — ${selected.nombre}`} onClose={()=>setSelected(null)}>
-          <div style={{marginBottom:16}}>
-            <div style={{fontSize:13,color:"#6b7280",marginBottom:4}}>Cultivo / Uso</div>
-            <div style={{fontWeight:700}}>{selected.cultivo||"Sin asignar"}</div>
+      {/* Modal de detalle de lote */}
+      {selected && (
+        <Modal
+          title={`Lote ${selected.numero} — ${selected.nombre}`}
+          onClose={() => setSelected(null)}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>
+              Cultivo / Uso
+            </div>
+            <div style={{ fontWeight: 700 }}>
+              {selected.cultivo || "Sin asignar"}
+            </div>
           </div>
-          <div style={{marginBottom:16}}>
-            <div style={{fontSize:13,color:"#6b7280",marginBottom:4}}>Hectáreas</div>
-            <div style={{fontWeight:700}}>{selected.hectareas||"—"} ha</div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>
+              Hectáreas
+            </div>
+            <div style={{ fontWeight: 700 }}>
+              {selected.hectareas || "—"} ha
+            </div>
           </div>
-          <div style={{marginBottom:16}}>
-            <div style={{fontSize:13,color:"#6b7280",marginBottom:8}}>Órdenes de trabajo en este lote</div>
-            {ordenes.filter(o=>o.titulo?.toLowerCase().includes(`lote ${selected.numero}`)||o.titulo?.toLowerCase().includes(selected.nombre?.toLowerCase())).length===0
-              ?<div style={{fontSize:13,color:"#9ca3af"}}>Sin órdenes asociadas</div>
-              :ordenes.filter(o=>o.titulo?.toLowerCase().includes(`lote ${selected.numero}`)||o.titulo?.toLowerCase().includes(selected.nombre?.toLowerCase())).map(o=>(
-                <div key={o.id} style={{fontSize:13,padding:"6px 0",borderBottom:"1px solid #f3f4f6"}}>
-                  {TIPO_ICON[o.tipo]||"📋"} {o.titulo} · {fmtDate(o.fecha)}
-                </div>
-              ))
-            }
+          <div style={{ marginBottom: 16 }}>
+            <div
+              style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}
+            >
+              Órdenes de trabajo en este lote
+            </div>
+            {ordenes.filter(
+              (o) =>
+                o.titulo
+                  ?.toLowerCase()
+                  .includes(`lote ${selected.numero}`) ||
+                o.titulo
+                  ?.toLowerCase()
+                  .includes(selected.nombre?.toLowerCase())
+            ).length === 0 ? (
+              <div style={{ fontSize: 13, color: "#9ca3af" }}>
+                Sin órdenes asociadas
+              </div>
+            ) : (
+              ordenes
+                .filter(
+                  (o) =>
+                    o.titulo
+                      ?.toLowerCase()
+                      .includes(`lote ${selected.numero}`) ||
+                    o.titulo
+                      ?.toLowerCase()
+                      .includes(selected.nombre?.toLowerCase())
+                )
+                .map((o) => (
+                  <div
+                    key={o.id}
+                    style={{
+                      fontSize: 13,
+                      padding: "6px 0",
+                      borderBottom: "1px solid #f3f4f6",
+                    }}
+                  >
+                    {TIPO_ICON[o.tipo] || "📋"} {o.titulo} · {fmtDate(o.fecha)}
+                  </div>
+                ))
+            )}
           </div>
-          <div style={{display:"flex",gap:8}}>
-            <Btn variant="secondary" small onClick={()=>setEditLote({...selected})}><I.edit/> Editar</Btn>
-            <Btn variant="danger" small onClick={()=>delLote(selected.id)}><I.trash/> Eliminar</Btn>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn
+              variant="secondary"
+              small
+              onClick={() => setEditLote({ ...selected })}
+            >
+              <I.edit /> Editar
+            </Btn>
+            <Btn variant="danger" small onClick={() => delLote(selected.id)}>
+              <I.trash /> Eliminar
+            </Btn>
           </div>
         </Modal>
       )}
 
-      {editLote&&(
-        <Modal title="Editar Lote" onClose={()=>setEditLote(null)}>
-          <Inp label="Nombre del lote" value={editLote.nombre} onChange={e=>setEditLote({...editLote,nombre:e.target.value})}/>
-          <Inp label="Cultivo / Uso" value={editLote.cultivo} onChange={e=>setEditLote({...editLote,cultivo:e.target.value})} placeholder="Ej: Soja, Maíz, Pastoreo"/>
-          <Inp label="Hectáreas" type="number" value={editLote.hectareas} onChange={e=>setEditLote({...editLote,hectareas:e.target.value})}/>
-          <div style={{display:"flex",gap:10,marginTop:8}}>
-            <Btn variant="secondary" onClick={()=>setEditLote(null)} full>Cancelar</Btn>
-            <Btn variant="primary" onClick={saveLote} full><I.save/> Guardar</Btn>
+      {/* Modal de edición de lote confirmado */}
+      {editLote && (
+        <Modal title="Editar Lote" onClose={() => setEditLote(null)}>
+          <Inp
+            label="Nombre del lote"
+            value={editLote.nombre}
+            onChange={(e) =>
+              setEditLote({ ...editLote, nombre: e.target.value })
+            }
+          />
+          <Inp
+            label="Cultivo / Uso"
+            value={editLote.cultivo}
+            onChange={(e) =>
+              setEditLote({ ...editLote, cultivo: e.target.value })
+            }
+            placeholder="Ej: Soja, Maíz, Pastoreo"
+          />
+          <Inp
+            label="Hectáreas"
+            type="number"
+            value={editLote.hectareas}
+            onChange={(e) =>
+              setEditLote({ ...editLote, hectareas: e.target.value })
+            }
+          />
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <Btn
+              variant="secondary"
+              onClick={() => setEditLote(null)}
+              full
+            >
+              Cancelar
+            </Btn>
+            <Btn variant="primary" onClick={saveLote} full>
+              <I.save /> Guardar
+            </Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal de edición dentro del preview de IA */}
+      {editPreview && (
+        <Modal title="Corregir lote detectado" onClose={() => setEditPreview(null)}>
+          <div
+            style={{
+              background: "#f5f3ff",
+              borderRadius: 8,
+              padding: "8px 12px",
+              marginBottom: 14,
+              fontSize: 12,
+              color: "#7c3aed",
+            }}
+          >
+            Editando lote del preview de IA — los cambios se aplican al
+            confirmar.
+          </div>
+          <Inp
+            label="Nombre del lote"
+            value={editPreview.nombre}
+            onChange={(e) =>
+              setEditPreview({ ...editPreview, nombre: e.target.value })
+            }
+          />
+          <Inp
+            label="Hectáreas"
+            type="number"
+            value={editPreview.hectareas}
+            onChange={(e) =>
+              setEditPreview({ ...editPreview, hectareas: e.target.value })
+            }
+          />
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <Inp
+              label="Posición X (%)"
+              type="number"
+              value={Number(editPreview.x).toFixed(1)}
+              onChange={(e) =>
+                setEditPreview({ ...editPreview, x: Number(e.target.value) })
+              }
+            />
+            <Inp
+              label="Posición Y (%)"
+              type="number"
+              value={Number(editPreview.y).toFixed(1)}
+              onChange={(e) =>
+                setEditPreview({ ...editPreview, y: Number(e.target.value) })
+              }
+            />
+          </div>
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <Btn variant="secondary" onClick={() => setEditPreview(null)} full>
+              Cancelar
+            </Btn>
+            <Btn
+              variant="primary"
+              onClick={saveEditPreview}
+              full
+              style={{ background: "#7c3aed" }}
+            >
+              <I.save /> Aplicar cambio
+            </Btn>
           </div>
         </Modal>
       )}
     </div>
   );
 }
-
 // ── ANIMALES ────────────────────────────────────────────────────────────────
 function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   const EMPTY={rodeo:"",campo:"",lote:"",tipo:"vacas",raza:"Angus",razaCustom:"",cabezas:"",costo_por_cabeza:"",costo:0,fecha:todayISO()};
