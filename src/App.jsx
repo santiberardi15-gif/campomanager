@@ -756,6 +756,18 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
     const loadLeaflet = async () => {
       const L = (await import("leaflet")).default;
       await import("leaflet-draw");
+      // FIX: parchear bug de readableArea en leaflet-draw 1.0.4
+// (rompe la cadena de clicks al agregar el 2do/3er vértice)
+      if (L.GeometryUtil && L.GeometryUtil.readableArea) {
+        const orig = L.GeometryUtil.readableArea;
+        L.GeometryUtil.readableArea = function(area, isMetric, precision) {
+          try {
+            return orig.call(this, area, isMetric, precision);
+          } catch (e) {
+            return (area / 10000).toFixed(2) + ' ha';
+          }
+        };
+      }
       const turf = await import("@turf/turf");
 
       if (!mounted || !mapContainerRef.current) return;
