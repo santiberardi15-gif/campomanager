@@ -812,8 +812,15 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
           polygon: {
             allowIntersection: false,
             showArea: true,
+            showLength: true,
+            repeatMode: false,
             shapeOptions: { color: "#16a34a", weight: 3, fillOpacity: 0.3 },
+            icon: new L.DivIcon({
+              iconSize: new L.Point(8, 8),
+              className: "leaflet-div-icon leaflet-editing-icon",
+            }),
           },
+
           rectangle: {
             shapeOptions: { color: "#16a34a", weight: 3, fillOpacity: 0.3 },
           },
@@ -825,6 +832,10 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
         edit: { featureGroup: drawnItems, remove: false },
       });
       mapInstance.addControl(drawControl);
+      // Asegurar que el polígono no tenga límite de puntos
+      if (L.Draw && L.Draw.Polygon && L.Draw.Polygon.prototype) {
+        L.Draw.Polygon.prototype.options.maxPoints = 0;
+      }
 
       // Evento: cuando se termina de dibujar un polígono
       mapInstance.on(L.Draw.Event.CREATED, (e) => {
