@@ -816,43 +816,45 @@ Si no podés determinar las hectáreas de algún lote, usá null.
 Si el nombre no está claro, usá "Lote N" donde N es un número secuencial.
 Ordená los lotes de izquierda a derecha, de arriba a abajo.`;
 
-      const geminiRes = await fetch(
+      const aiRes = await fetch(
         `https://openrouter.ai/api/v1/chat/completions`,
         {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${GEMINI_KEY}`,
+            "HTTP-Referer": window.location.origin,
+            "X-Title": "Campo Manager",
+          },
           body: JSON.stringify({
-            contents: [
+            model: "google/gemini-2.0-flash-exp:free",
+            messages: [
               {
-                parts: [
-                  { text: prompt },
+                role: "user",
+                content: [
+                  { type: "text", text: prompt },
                   {
-                    inline_data: {
-                      mime_type: mimeType,
-                      data: base64,
-                    },
+                    type: "image_url",
+                    image_url: { url: `data:${mimeType};base64,${base64}` },
                   },
                 ],
               },
             ],
-            generationConfig: {
-              temperature: 0.1,
-              maxOutputTokens: 2048,
-            },
+            temperature: 0.1,
+            max_tokens: 2048,
           }),
         }
       );
 
-      if (!geminiRes.ok) {
-        const errData = await geminiRes.json();
+      if (!aiRes.ok) {
+        const errData = await aiRes.json();
         throw new Error(
-          errData?.error?.message || `Error de Gemini: ${geminiRes.status}`
+          errData?.error?.message || `Error de IA: ${aiRes.status}`
         );
       }
 
-      const geminiData = await geminiRes.json();
-      const rawText =
-        geminiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const aiData = await aiRes.json();
+      const rawText = aiData?.choices?.[0]?.message?.content || "";
 
       // 3. Parsear el JSON de respuesta
       // Limpiar posibles bloques de código que Gemini a veces agrega igual
