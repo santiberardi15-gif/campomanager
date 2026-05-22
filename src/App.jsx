@@ -9,6 +9,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
+import "leaflet/dist/leaflet.css";
+import "leaflet-draw/dist/leaflet.draw.css";
 import {
   BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
@@ -726,11 +728,550 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
 // ══════════════════════════════════════════════════════════════════════════
 
 // ── MAPA DE LOTES INTERACTIVO con detección IA ─────────────────────────────
+// ── MAPA DE LOTES SATELITAL — Dibujá polígonos sobre el campo ──────────────
 function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
-  const [adding, setAdding] = useState(false);
   const [selected, setSelected] = useState(null);
   const [editLote, setEditLote] = useState(null);
-  const imgRef = useRef();
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const mapContainerRef = useRef(null);
+  const mapRef = useRef(null);
+  const drawnLayerRef = useRef(null);
+  const lotesLayerRef = useRef(null);
+  const LRef = useRef(null);
+
+  const lotes = campo.lotes_data || [];
+
+  // ── Cargar Leaflet dinámicamente (solo cuando el componente se monta) ──
+  useEffect(() => {
+    let mounted = true;
+    let mapInstance = null;
+
+    const loadLeaflet = async () => {
+      const L = (await import("leaflet")).default;
+      await import("leaflet-draw");
+      const turf = await import("@turf/turf");
+
+      if (!mounted || !mapContainerRef.current) return;
+      LRef.current = { L, turf };
+
+      // Fix iconos rotos de Leaflet por bundlers
+      delete L.Icon.Default.prototype._getIconUrl;
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl:
+          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png",
+        iconUrl:
+          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png",
+        shadowUrl:
+          "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png",
+      });
+
+      // Centro inicial: si hay lotes con coordenadas usamos el promedio,
+      // sino centro de Argentina (Pampa Húmeda)
+      let center = [-34.6, -63.0];
+      let zoom = 6;
+      const lotesConCoords = lotes.filter(
+        (l) => l.coords && l.coords.length > 0
+      );
+      if (lotesConCoords.length > 0) {
+        const allPoints = lotesConCoords.flatMap((l) => l.coords);
+        const avgLat =
+          allPoints.reduce((s, p) => s + p[0], 0) / allPoints.length;
+        const avgLng =
+          allPoints.reduce((s, p) => s + p[1], 0) / allPoints.length;
+        center = [avgLat, avgLng];
+        zoom = 14;
+      }
+
+      mapInstance = L.map(mapContainerRef.current).setView(center, zoom);
+      mapRef.current = mapInstance;
+
+      // Capa satelital de Esri (gratis, sin API key)
+      L.tileLayer(
+        "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        {
+          attribution:
+            "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics",
+          maxZoom: 19,
+        }
+      ).addTo(mapInstance);
+
+      // Capa para los lotes guardados
+      const lotesLayer = L.featureGroup().addTo(mapInstance);
+      lotesLayerRef.current = lotesLayer;
+
+      // Capa para el dibujo nuevo
+      const drawnItems = L.featureGroup().addTo(mapInstance);
+      drawnLayerRef.current = drawnItems;
+
+      // Control de dibujo
+      const drawControl = new L.Control.Draw({
+        position: "topright",
+        draw: {
+          polygon: {
+            allowIntersection: false,
+            showArea: true,
+            shapeOptions: { color: "#16a34a", weight: 3, fillOpacity: 0.3 },
+          },
+          rectangle: {
+            shapeOptions: { color: "#16a34a", weight: 3, fillOpacity: 0.3 },
+          },
+          polyline: false,
+          circle: false,
+          marker: false,
+          circlemarker: false,
+        },
+        edit: { featureGroup: drawnItems, remove: false },
+      });
+      mapInstance.addControl(drawControl);
+
+      // Evento: cuando se termina de dibujar un polígono
+      mapInstance.on(L.Draw.Event.CREATED, (e) => {
+        const layer = e.layer;
+        const coords = layer
+          .getLatLngs()[0]
+          .map((latlng) => [latlng.lat, latlng.lng]);
+
+        // Calcular hectáreas con turf
+        const polygon = turf.polygon([
+          [...coords.map((c) => [c[1], c[0]]), [coords[0][1], coords[0][0]]],
+        ]);
+        const areaM2 = turf.area(polygon);
+        const hectareas = (areaM2 / 10000).toFixed(2);
+
+        // Centro del polígono para guardar (uso futuro)
+        const centroid = turf.centroid(polygon).geometry.coordinates;
+
+        const num = (campo.lotes_data || []).length + 1;
+        const nuevo = {
+          id: Date.now(),
+          numero: num,
+          nombre: `Lote ${num}`,
+          cultivo: "",
+          hectareas,
+          coords,
+          centro: [centroid[1], centroid[0]],
+        };
+
+        onUpdate([...(campo.lotes_data || []), nuevo]);
+      });
+    };
+
+    loadLeaflet();
+
+    return () => {
+      mounted = false;
+      if (mapInstance) {
+        mapInstance.remove();
+      }
+    };
+    // eslint-disable-next-line
+  }, []);
+
+  // ── Re-render de los lotes guardados cuando cambia campo.lotes_data ──
+  useEffect(() => {
+    if (!LRef.current || !lotesLayerRef.current || !mapRef.current) return;
+    const { L } = LRef.current;
+    const layer = lotesLayerRef.current;
+
+    layer.clearLayers();
+
+    lotes.forEach((lote) => {
+      if (!lote.coords || lote.coords.length < 3) return;
+      const polygon = L.polygon(lote.coords, {
+        color: "#16a34a",
+        weight: 2,
+        fillOpacity: 0.4,
+      });
+
+      // Label con el número del lote en el centro
+      if (lote.centro) {
+        const labelIcon = L.divIcon({
+          className: "lote-label",
+          html: `<div style="background:#16a34a;color:#fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3)">${lote.numero}</div>`,
+          iconSize: [30, 30],
+          iconAnchor: [15, 15],
+        });
+        L.marker(lote.centro, { icon: labelIcon })
+          .addTo(layer)
+          .on("click", () => setSelected(lote));
+      }
+
+      polygon.on("click", () => setSelected(lote));
+      polygon.bindTooltip(
+        `<b>Lote ${lote.numero}</b> — ${lote.nombre}<br>${lote.hectareas} ha${
+          lote.cultivo ? ` · ${lote.cultivo}` : ""
+        }`
+      );
+      polygon.addTo(layer);
+    });
+
+    // Auto-ajustar zoom para ver todos los lotes
+    if (lotes.length > 0 && lotes[0].coords) {
+      mapRef.current.fitBounds(layer.getBounds(), { padding: [40, 40] });
+    }
+    // eslint-disable-next-line
+  }, [campo.lotes_data]);
+
+  // ── Buscar localidad y centrar mapa ────────────────────────────────────
+  const buscarLocalidad = async () => {
+    if (!searchQuery || searchQuery.length < 3) return;
+    setSearching(true);
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+          searchQuery + ", Argentina"
+        )}&limit=5`
+      );
+      const data = await res.json();
+      setSearchResults(data);
+    } catch (e) {
+      setSearchResults([]);
+    }
+    setSearching(false);
+  };
+
+  const irALocalidad = (result) => {
+    if (!mapRef.current) return;
+    mapRef.current.setView([Number(result.lat), Number(result.lon)], 14);
+    setSearchResults([]);
+    setSearchQuery(result.display_name.split(",")[0]);
+  };
+
+  // ── Eliminar / editar lotes ────────────────────────────────────────────
+  const delLote = (id) => {
+    const filtered = lotes
+      .filter((l) => l.id !== id)
+      .map((l, idx) => ({ ...l, numero: idx + 1 }));
+    onUpdate(filtered);
+    setSelected(null);
+  };
+
+  const saveLote = () => {
+    onUpdate(lotes.map((l) => (l.id === editLote.id ? editLote : l)));
+    setEditLote(null);
+    setSelected(null);
+  };
+
+  // ── Render ──────────────────────────────────────────────────────────────
+  return (
+    <div>
+      {/* Buscador de localidad */}
+      <EditOnly>
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginBottom: 10,
+            position: "relative",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ position: "relative", flex: 1, minWidth: 220 }}>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && buscarLocalidad()}
+              placeholder="Buscar localidad o provincia..."
+              style={{
+                width: "100%",
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: "1.5px solid #e5e7eb",
+                fontSize: 13,
+                boxSizing: "border-box",
+              }}
+            />
+            {searchResults.length > 0 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  background: "#fff",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 8,
+                  marginTop: 4,
+                  zIndex: 1000,
+                  boxShadow: "0 4px 16px rgba(0,0,0,0.1)",
+                  maxHeight: 200,
+                  overflowY: "auto",
+                }}
+              >
+                {searchResults.map((r, i) => (
+                  <div
+                    key={i}
+                    onClick={() => irALocalidad(r)}
+                    style={{
+                      padding: "8px 12px",
+                      fontSize: 13,
+                      cursor: "pointer",
+                      borderBottom: "1px solid #f3f4f6",
+                    }}
+                    onMouseEnter={(e) =>
+                      (e.currentTarget.style.background = "#f9fafb")
+                    }
+                    onMouseLeave={(e) =>
+                      (e.currentTarget.style.background = "#fff")
+                    }
+                  >
+                    📍 {r.display_name}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+          <Btn variant="secondary" small onClick={buscarLocalidad} disabled={searching}>
+            {searching ? "Buscando..." : "Buscar"}
+          </Btn>
+        </div>
+      </EditOnly>
+
+      <div
+        style={{
+          background: "#f0fdf4",
+          border: "1px solid #bbf7d0",
+          borderRadius: 8,
+          padding: "8px 12px",
+          marginBottom: 10,
+          fontSize: 12,
+          color: "#15803d",
+        }}
+      >
+        💡 <b>Cómo usar:</b> 1) Buscá tu localidad arriba o navegá el mapa con el
+        mouse. 2) Usá los botones de la esquina superior derecha del mapa para{" "}
+        <b>dibujar el contorno de cada lote</b>. 3) Las hectáreas se calculan
+        solas. {lotes.length} lote(s) marcado(s).
+      </div>
+
+      <div
+        ref={mapContainerRef}
+        style={{
+          width: "100%",
+          height: 500,
+          borderRadius: 10,
+          border: "1px solid #e5e7eb",
+        }}
+      />
+
+      {/* Tabla resumen de lotes */}
+      {lotes.length > 0 && (
+        <div
+          style={{
+            marginTop: 14,
+            background: "#f9fafb",
+            borderRadius: 10,
+            padding: 12,
+          }}
+        >
+          <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 8 }}>
+            Lotes del campo ({lotes.length})
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+                  {["#", "Nombre", "Cultivo", "Hectáreas", ""].map((h) => (
+                    <th
+                      key={h}
+                      style={{
+                        textAlign: "left",
+                        padding: "6px 10px",
+                        fontSize: 11,
+                        fontWeight: 700,
+                        color: "#6b7280",
+                      }}
+                    >
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {lotes.map((l) => (
+                  <tr
+                    key={l.id}
+                    style={{ borderBottom: "1px solid #f3f4f6" }}
+                  >
+                    <td
+                      style={{
+                        padding: "6px 10px",
+                        fontWeight: 700,
+                        color: "#16a34a",
+                      }}
+                    >
+                      {l.numero}
+                    </td>
+                    <td style={{ padding: "6px 10px", fontSize: 13 }}>
+                      {l.nombre}
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 10px",
+                        fontSize: 13,
+                        color: l.cultivo ? "#111" : "#9ca3af",
+                      }}
+                    >
+                      {l.cultivo || "—"}
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 10px",
+                        fontSize: 13,
+                        fontWeight: 600,
+                      }}
+                    >
+                      {l.hectareas} ha
+                    </td>
+                    <td style={{ padding: "6px 10px" }}>
+                      <div style={{ display: "flex", gap: 4 }}>
+                        <Btn
+                          variant="ghost"
+                          small
+                          onClick={() => setEditLote({ ...l })}
+                        >
+                          <I.edit />
+                        </Btn>
+                        <Btn
+                          variant="ghost"
+                          small
+                          onClick={() => delLote(l.id)}
+                        >
+                          <I.trash />
+                        </Btn>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de detalle de lote */}
+      {selected && (
+        <Modal
+          title={`Lote ${selected.numero} — ${selected.nombre}`}
+          onClose={() => setSelected(null)}
+        >
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>
+              Cultivo / Uso
+            </div>
+            <div style={{ fontWeight: 700 }}>
+              {selected.cultivo || "Sin asignar"}
+            </div>
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>
+              Hectáreas
+            </div>
+            <div style={{ fontWeight: 700 }}>{selected.hectareas} ha</div>
+          </div>
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 8 }}>
+              Órdenes de trabajo en este lote
+            </div>
+            {ordenes.filter(
+              (o) =>
+                o.titulo
+                  ?.toLowerCase()
+                  .includes(`lote ${selected.numero}`) ||
+                o.titulo
+                  ?.toLowerCase()
+                  .includes(selected.nombre?.toLowerCase())
+            ).length === 0 ? (
+              <div style={{ fontSize: 13, color: "#9ca3af" }}>
+                Sin órdenes asociadas
+              </div>
+            ) : (
+              ordenes
+                .filter(
+                  (o) =>
+                    o.titulo
+                      ?.toLowerCase()
+                      .includes(`lote ${selected.numero}`) ||
+                    o.titulo
+                      ?.toLowerCase()
+                      .includes(selected.nombre?.toLowerCase())
+                )
+                .map((o) => (
+                  <div
+                    key={o.id}
+                    style={{
+                      fontSize: 13,
+                      padding: "6px 0",
+                      borderBottom: "1px solid #f3f4f6",
+                    }}
+                  >
+                    {TIPO_ICON[o.tipo] || "📋"} {o.titulo} ·{" "}
+                    {fmtDate(o.fecha)}
+                  </div>
+                ))
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <Btn
+              variant="secondary"
+              small
+              onClick={() => setEditLote({ ...selected })}
+            >
+              <I.edit /> Editar
+            </Btn>
+            <Btn variant="danger" small onClick={() => delLote(selected.id)}>
+              <I.trash /> Eliminar
+            </Btn>
+          </div>
+        </Modal>
+      )}
+
+      {/* Modal de edición */}
+      {editLote && (
+        <Modal title="Editar Lote" onClose={() => setEditLote(null)}>
+          <Inp
+            label="Nombre del lote"
+            value={editLote.nombre}
+            onChange={(e) =>
+              setEditLote({ ...editLote, nombre: e.target.value })
+            }
+          />
+          <Inp
+            label="Cultivo / Uso"
+            value={editLote.cultivo}
+            onChange={(e) =>
+              setEditLote({ ...editLote, cultivo: e.target.value })
+            }
+            placeholder="Ej: Soja, Maíz, Pastoreo"
+          />
+          <Inp
+            label="Hectáreas (calculado automáticamente)"
+            type="number"
+            value={editLote.hectareas}
+            onChange={(e) =>
+              setEditLote({ ...editLote, hectareas: e.target.value })
+            }
+          />
+          <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+            <Btn
+              variant="secondary"
+              onClick={() => setEditLote(null)}
+              full
+            >
+              Cancelar
+            </Btn>
+            <Btn variant="primary" onClick={saveLote} full>
+              <I.save /> Guardar
+            </Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
 
   // ── Estado para el flujo de IA ──────────────────────────────────────────
   const [aiLoading, setAiLoading] = useState(false);
