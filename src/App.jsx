@@ -827,7 +827,7 @@ Ordená los lotes de izquierda a derecha, de arriba a abajo.`;
             "X-Title": "Campo Manager",
           },
           body: JSON.stringify({
-            model: "meta-llama/llama-3.2-11b-vision-instruct:free",
+            model: "google/gemma-4-31b-it:free",
             messages: [
               {
                 role: "user",
