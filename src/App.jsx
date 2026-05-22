@@ -817,7 +817,7 @@ Si el nombre no está claro, usá "Lote N" donde N es un número secuencial.
 Ordená los lotes de izquierda a derecha, de arriba a abajo.`;
 
       const geminiRes = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_KEY}`,
+        `https://openrouter.ai/api/v1/chat/completions`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
