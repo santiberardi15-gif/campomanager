@@ -1237,14 +1237,12 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
       const {data:inserted,error}=await sb.from("animales").insert({...row,org_id:orgId}).select().single();
       if(error){toast(error.message,"error");return;}
       toast("Rodeo agregado");
-      // Auto-create finanza
       if(total>0){
         await sb.from("finanzas").insert({org_id:orgId,fecha:row.fecha,tipo:"Egreso",concepto:`Compra ${cabezas} ${row.tipo} - ${row.rodeo}`,categoria:"Compra hacienda",campo:row.campo,monto:total,origen:"animal",origen_id:inserted.id});
       }
     }
 
     if(isEdit && total!==oldCosto){
-      // Update related finanza
       const diff = total-oldCosto;
       if(diff!==0){
         await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Ajuste rodeo ${row.rodeo}`,categoria:"Compra hacienda",campo:row.campo,monto:diff,origen:"animal_ajuste",origen_id:editItem.id_real});
@@ -1255,60 +1253,58 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   };
 
   const del = async id=>{
-    // Cascade: also remove related finanzas entries
     await sb.from("finanzas").delete().eq("origen_id",id).in("origen",["animal","animal_ajuste"]);
     const {error}=await sb.from("animales").delete().eq("id",id);
     if(error){toast(error.message,"error");return;}
     setConfirm(null); toast("Rodeo eliminado"); reload();
   };
+
   const transferirRodeo = async ()=>{
-  const t = transferItem;
-  if(!t.campo_destino){toast("Elegí el campo destino","error");return;}
-  if(t.campo_destino===t.original.campo && (t.lote_destino||"")===(t.original.lote||"")){
-    toast("El destino es igual al origen","error");return;
-  }
-  const cabezasMover = Number(t.cabezas_a_mover);
-  const cabezasOrig = Number(t.original.cabezas);
-  if(!cabezasMover || cabezasMover<=0 || cabezasMover>cabezasOrig){
-    toast("Cantidad de cabezas inválida","error");return;
-  }
-  const cpc = Number(t.original.costo_por_cabeza||0);
+    const t = transferItem;
+    if(!t.campo_destino){toast("Elegí el campo destino","error");return;}
+    if(t.campo_destino===t.original.campo && (t.lote_destino||"")===(t.original.lote||"")){
+      toast("El destino es igual al origen","error");return;
+    }
+    const cabezasMover = Number(t.cabezas_a_mover);
+    const cabezasOrig = Number(t.original.cabezas);
+    if(!cabezasMover || cabezasMover<=0 || cabezasMover>cabezasOrig){
+      toast("Cantidad de cabezas inválida","error");return;
+    }
+    const cpc = Number(t.original.costo_por_cabeza||0);
 
-  if(cabezasMover===cabezasOrig){
-    // Mover el rodeo completo: solo cambiar campo y lote
-    const {error} = await sb.from("animales").update({
-      campo:t.campo_destino,
-      lote:t.lote_destino||"",
-    }).eq("id",t.original.id);
-    if(error){toast(error.message,"error");return;}
-    toast(`Rodeo movido a ${t.campo_destino}`);
-  } else {
-    // Partir: reducir el origen e insertar uno nuevo en el destino
-    const cabezasQuedan = cabezasOrig - cabezasMover;
-    const {error:e1} = await sb.from("animales").update({
-      cabezas:cabezasQuedan,
-      costo:cabezasQuedan*cpc,
-    }).eq("id",t.original.id);
-    if(e1){toast(e1.message,"error");return;}
+    if(cabezasMover===cabezasOrig){
+      const {error} = await sb.from("animales").update({
+        campo:t.campo_destino,
+        lote:t.lote_destino||"",
+      }).eq("id",t.original.id);
+      if(error){toast(error.message,"error");return;}
+      toast(`Rodeo movido a ${t.campo_destino}`);
+    } else {
+      const cabezasQuedan = cabezasOrig - cabezasMover;
+      const {error:e1} = await sb.from("animales").update({
+        cabezas:cabezasQuedan,
+        costo:cabezasQuedan*cpc,
+      }).eq("id",t.original.id);
+      if(e1){toast(e1.message,"error");return;}
 
-    const nuevoRodeo = {
-      rodeo:t.original.rodeo,
-      campo:t.campo_destino,
-      lote:t.lote_destino||"",
-      tipo:t.original.tipo,
-      raza:t.original.raza,
-      cabezas:cabezasMover,
-      costo_por_cabeza:cpc,
-      costo:cabezasMover*cpc,
-      fecha:t.original.fecha,
-      org_id:orgId,
-    };
-    const {error:e2} = await sb.from("animales").insert(nuevoRodeo);
-    if(e2){toast(e2.message,"error");return;}
-    toast(`${cabezasMover} cab. transferidas a ${t.campo_destino}`);
-  }
-  setTransferItem(null); reload();
-};
+      const nuevoRodeo = {
+        rodeo:t.original.rodeo,
+        campo:t.campo_destino,
+        lote:t.lote_destino||"",
+        tipo:t.original.tipo,
+        raza:t.original.raza,
+        cabezas:cabezasMover,
+        costo_por_cabeza:cpc,
+        costo:cabezasMover*cpc,
+        fecha:t.original.fecha,
+        org_id:orgId,
+      };
+      const {error:e2} = await sb.from("animales").insert(nuevoRodeo);
+      if(e2){toast(e2.message,"error");return;}
+      toast(`${cabezasMover} cab. transferidas a ${t.campo_destino}`);
+    }
+    setTransferItem(null); reload();
+  };
 
   return(
     <div>
@@ -1352,16 +1348,21 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                   <td style={{padding:"12px",fontSize:12,color:"#6b7280"}}>{fmtDate(a.fecha)}</td>
                   <td style={{padding:"12px"}}>
                     <div style={{display:"flex",gap:4}}>
-                      <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
-                      <EditOnly><Btn variant="ghost" small onClick={()=>setTransferItem({
-                        item:s,
-                        campo_destino:"",
-                        cantidad_a_mover:s.cantidad,
-                      })} title="Transferir a otro campo">🔄</Btn></EditOnly>
-                      <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
-                      <DelBtn onClick={()=>setConfirm(s.id)}/>
+                      <EditOnly>
+                        <Btn variant="ghost" small onClick={()=>setTransferItem({
+                          original:a,
+                          campo_destino:"",
+                          lote_destino:"",
+                          cabezas_a_mover:a.cabezas,
+                        })} title="Transferir a otro campo">🔄</Btn>
+                      </EditOnly>
+                      <EditBtn onClick={()=>{
+                        const razaPredef = RAZAS_PREDEFINIDAS.includes(a.raza);
+                        setEditItem({...a,id_real:a.id,raza:razaPredef?a.raza:"Otra",razaCustom:razaPredef?"":a.raza});
+                      }}/>
+                      <DelBtn onClick={()=>setConfirm(a.id)}/>
                     </div>
-                </td>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -1420,64 +1421,63 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
         </Modal>
         );
       })()}
+
       {transferItem&&(()=>{
-  const camposDisponibles = data.campos.filter(c=>c.nombre!==transferItem.item.ubicacion);
-  const cantMover = Number(transferItem.cantidad_a_mover)||0;
-  const cantOrig = Number(transferItem.item.cantidad);
-  const existeEnDestino = transferItem.campo_destino && data.stock.find(s=>
-    s.id!==transferItem.item.id &&
-    s.ubicacion===transferItem.campo_destino &&
-    s.nombre===transferItem.item.nombre &&
-    s.categoria===transferItem.item.categoria &&
-    s.unidad===transferItem.item.unidad
-  );
-  return(
-  <Modal title={`Transferir ${transferItem.item.nombre}`} onClose={()=>setTransferItem(null)}>
-    <div style={{background:"#f9fafb",borderRadius:10,padding:12,marginBottom:14,fontSize:13}}>
-      <div style={{marginBottom:4}}>📍 <b>Origen:</b> {transferItem.item.ubicacion||"Sin asignar"}</div>
-      <div>📦 <b>{transferItem.item.cantidad}</b> {transferItem.item.unidad} disponibles</div>
-    </div>
+        const campoDestObj = data.campos.find(c=>c.nombre===transferItem.campo_destino);
+        const lotesDestino = campoDestObj?.lotes_data||[];
+        const camposDisponibles = data.campos.filter(c=>c.nombre!==transferItem.original.campo);
+        return(
+        <Modal title={`Transferir rodeo "${transferItem.original.rodeo}"`} onClose={()=>setTransferItem(null)}>
+          <div style={{background:"#f9fafb",borderRadius:10,padding:12,marginBottom:14,fontSize:13}}>
+            <div style={{marginBottom:4}}>📍 <b>Origen:</b> {transferItem.original.campo}{transferItem.original.lote?` · ${transferItem.original.lote}`:""}</div>
+            <div>🐄 <b>{transferItem.original.cabezas}</b> {transferItem.original.tipo} ({transferItem.original.raza})</div>
+          </div>
 
-    <Sel label="Campo destino" value={transferItem.campo_destino} onChange={e=>setTransferItem({...transferItem,campo_destino:e.target.value})}>
-      <option value="">Seleccionar...</option>
-      {camposDisponibles.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
-    </Sel>
+          <Sel label="Campo destino" value={transferItem.campo_destino} onChange={e=>setTransferItem({...transferItem,campo_destino:e.target.value,lote_destino:""})}>
+            <option value="">Seleccionar...</option>
+            {camposDisponibles.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+          </Sel>
 
-    <Inp label={`Cantidad a transferir en ${transferItem.item.unidad} (máximo ${cantOrig})`} type="number" value={transferItem.cantidad_a_mover} onChange={e=>setTransferItem({...transferItem,cantidad_a_mover:e.target.value})}/>
+          {transferItem.campo_destino && lotesDestino.length>0 && (
+            <Sel label="Lote destino" value={transferItem.lote_destino} onChange={e=>setTransferItem({...transferItem,lote_destino:e.target.value})}>
+              <option value="">Sin asignar</option>
+              {lotesDestino.map(l=><option key={l.id} value={l.nombre}>Lote {l.numero} — {l.nombre}{l.cultivo?` (${l.cultivo})`:""}</option>)}
+            </Sel>
+          )}
 
-    {existeEnDestino && (
-      <div style={{background:"#dbeafe",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#1d4ed8"}}>
-        ℹ️ Ya hay <b>{existeEnDestino.cantidad} {existeEnDestino.unidad}</b> de {transferItem.item.nombre} en {transferItem.campo_destino}. Se fusionará y el costo unitario se promediará.
-      </div>
-    )}
-    {cantMover>0 && cantMover<cantOrig && (
-      <div style={{background:"#fef9c3",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
-        Quedarán <b>{cantOrig-cantMover} {transferItem.item.unidad}</b> en {transferItem.item.ubicacion}.
-      </div>
-    )}
-    {cantMover===cantOrig && (
-      <div style={{background:"#dcfce7",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#15803d"}}>
-        ✓ Se transferirá todo el stock disponible.
-      </div>
-    )}
+          <Inp label={`Cabezas a transferir (máximo ${transferItem.original.cabezas})`} type="number" value={transferItem.cabezas_a_mover} onChange={e=>setTransferItem({...transferItem,cabezas_a_mover:e.target.value})}/>
 
-    <div style={{display:"flex",gap:10,marginTop:8}}>
-      <Btn variant="secondary" onClick={()=>setTransferItem(null)} full>Cancelar</Btn>
-      <Btn variant="primary" onClick={transferirInsumo} full>🔄 Transferir</Btn>
-    </div>
-  </Modal>
-  );
-})()}
+          {Number(transferItem.cabezas_a_mover)<Number(transferItem.original.cabezas) && Number(transferItem.cabezas_a_mover)>0 && (
+            <div style={{background:"#fef9c3",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
+              ℹ️ Se moverán {transferItem.cabezas_a_mover} cab. al campo destino. Quedarán <b>{Number(transferItem.original.cabezas)-Number(transferItem.cabezas_a_mover||0)}</b> cab. en {transferItem.original.campo}.
+            </div>
+          )}
+          {Number(transferItem.cabezas_a_mover)===Number(transferItem.original.cabezas) && (
+            <div style={{background:"#dcfce7",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#15803d"}}>
+              ✓ Se transferirá el rodeo completo.
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:10,marginTop:8}}>
+            <Btn variant="secondary" onClick={()=>setTransferItem(null)} full>Cancelar</Btn>
+            <Btn variant="primary" onClick={transferirRodeo} full>🔄 Transferir</Btn>
+          </div>
+        </Modal>
+        );
+      })()}
+
       {confirm&&<ConfirmModal msg="¿Eliminar este rodeo?" onConfirm={()=>del(confirm)} onCancel={()=>setConfirm(null)}/>}
     </div>
   );
 }
+
 
 // ── STOCK ───────────────────────────────────────────────────────────────────
 function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
   const EMPTY={nombre:"",nombreCustom:"",unidad:"kg",categoria:"Fertilizante",cantidad:"",minimo:"",costo_unit:"",ubicacion:""};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [comprarItem,setComprarItem]=useState(null);
+  const [transferItem,setTransferItem]=useState(null);
   const [search,setSearch]=useState("");
   const [catFilter,setCatFilter]=useState("Todas");
   const [campoFil,setCampoFil]=useState("Todos");
@@ -1525,7 +1525,6 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
     const costo = Number(comprarItem.costo_unit);
     const cantActual = Number(comprarItem.item.cantidad);
     const total = cantNueva*costo;
-    // Weighted average cost
     const newAvg = ((cantActual*Number(comprarItem.item.costo_unit))+(cantNueva*costo))/(cantActual+cantNueva);
     await sb.from("stock").update({cantidad:cantActual+cantNueva,costo_unit:newAvg}).eq("id",comprarItem.item.id);
     await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad})`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,origen:"stock_compra",origen_id:comprarItem.item.id});
@@ -1533,8 +1532,80 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
     setComprarItem(null); reload();
   };
 
+  const transferirInsumo = async ()=>{
+    const t = transferItem;
+    if(!t.campo_destino){toast("Elegí el campo destino","error");return;}
+    if(t.campo_destino===t.item.ubicacion){toast("El destino es igual al origen","error");return;}
+    const cantMover = Number(t.cantidad_a_mover);
+    const cantOrig = Number(t.item.cantidad);
+    if(!cantMover || cantMover<=0 || cantMover>cantOrig){
+      toast("Cantidad inválida","error");return;
+    }
+    const costoUnitOrig = Number(t.item.costo_unit||0);
+
+    if(cantMover===cantOrig){
+      const existente = data.stock.find(s=>
+        s.id!==t.item.id &&
+        s.ubicacion===t.campo_destino &&
+        s.nombre===t.item.nombre &&
+        s.categoria===t.item.categoria &&
+        s.unidad===t.item.unidad
+      );
+      if(existente){
+        const cantDest = Number(existente.cantidad);
+        const costoUnitDest = Number(existente.costo_unit||0);
+        const nuevoCostoUnit = ((cantDest*costoUnitDest)+(cantMover*costoUnitOrig))/(cantDest+cantMover);
+        await sb.from("stock").update({
+          cantidad:cantDest+cantMover,
+          costo_unit:nuevoCostoUnit,
+        }).eq("id",existente.id);
+        await sb.from("stock").delete().eq("id",t.item.id);
+        toast(`Movido y fusionado con stock existente en ${t.campo_destino}`);
+      } else {
+        const {error} = await sb.from("stock").update({ubicacion:t.campo_destino}).eq("id",t.item.id);
+        if(error){toast(error.message,"error");return;}
+        toast(`Insumo movido a ${t.campo_destino}`);
+      }
+    } else {
+      const cantQueda = cantOrig - cantMover;
+      const {error:e1} = await sb.from("stock").update({cantidad:cantQueda}).eq("id",t.item.id);
+      if(e1){toast(e1.message,"error");return;}
+
+      const existente = data.stock.find(s=>
+        s.id!==t.item.id &&
+        s.ubicacion===t.campo_destino &&
+        s.nombre===t.item.nombre &&
+        s.categoria===t.item.categoria &&
+        s.unidad===t.item.unidad
+      );
+      if(existente){
+        const cantDest = Number(existente.cantidad);
+        const costoUnitDest = Number(existente.costo_unit||0);
+        const nuevoCostoUnit = ((cantDest*costoUnitDest)+(cantMover*costoUnitOrig))/(cantDest+cantMover);
+        await sb.from("stock").update({
+          cantidad:cantDest+cantMover,
+          costo_unit:nuevoCostoUnit,
+        }).eq("id",existente.id);
+      } else {
+        const nuevoStock = {
+          nombre:t.item.nombre,
+          unidad:t.item.unidad,
+          categoria:t.item.categoria,
+          cantidad:cantMover,
+          minimo:Number(t.item.minimo||0),
+          costo_unit:costoUnitOrig,
+          ubicacion:t.campo_destino,
+          org_id:orgId,
+        };
+        const {error:e2} = await sb.from("stock").insert(nuevoStock);
+        if(e2){toast(e2.message,"error");return;}
+      }
+      toast(`${cantMover} ${t.item.unidad} transferidos a ${t.campo_destino}`);
+    }
+    setTransferItem(null); reload();
+  };
+
   const del = async id=>{
-    // Cascade: also remove related finanzas entries (stock initial + stock_compra)
     await sb.from("finanzas").delete().eq("origen_id",id).in("origen",["stock","stock_compra"]);
     const {error}=await sb.from("stock").delete().eq("id",id);
     if(error){toast(error.message,"error");return;}
@@ -1593,18 +1664,20 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                       </div>
                     </td>
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
-                   <td style={{padding:"12px"}}>
-                    <div style={{display:"flex",gap:4}}>
-                      <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
-                      <EditOnly><Btn variant="ghost" small onClick={()=>setTransferItem({
-                        item:s,
-                        campo_destino:"",
-                        cantidad_a_mover:s.cantidad,
-                      })} title="Transferir a otro campo">🔄</Btn></EditOnly>
-                      <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
-                      <DelBtn onClick={()=>setConfirm(s.id)}/>
-                    </div>
-                  </td>
+                    <td style={{padding:"12px"}}>
+                      <div style={{display:"flex",gap:4}}>
+                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
+                        <EditOnly>
+                          <Btn variant="ghost" small onClick={()=>setTransferItem({
+                            item:s,
+                            campo_destino:"",
+                            cantidad_a_mover:s.cantidad,
+                          })} title="Transferir a otro campo">🔄</Btn>
+                        </EditOnly>
+                        <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
+                        <DelBtn onClick={()=>setConfirm(s.id)}/>
+                      </div>
+                    </td>
                   </tr>
                 );
               })}
@@ -1672,10 +1745,61 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
           </div>
         </Modal>
       )}
+
+      {transferItem&&(()=>{
+        const camposDisponibles = data.campos.filter(c=>c.nombre!==transferItem.item.ubicacion);
+        const cantMover = Number(transferItem.cantidad_a_mover)||0;
+        const cantOrig = Number(transferItem.item.cantidad);
+        const existeEnDestino = transferItem.campo_destino && data.stock.find(s=>
+          s.id!==transferItem.item.id &&
+          s.ubicacion===transferItem.campo_destino &&
+          s.nombre===transferItem.item.nombre &&
+          s.categoria===transferItem.item.categoria &&
+          s.unidad===transferItem.item.unidad
+        );
+        return(
+        <Modal title={`Transferir ${transferItem.item.nombre}`} onClose={()=>setTransferItem(null)}>
+          <div style={{background:"#f9fafb",borderRadius:10,padding:12,marginBottom:14,fontSize:13}}>
+            <div style={{marginBottom:4}}>📍 <b>Origen:</b> {transferItem.item.ubicacion||"Sin asignar"}</div>
+            <div>📦 <b>{transferItem.item.cantidad}</b> {transferItem.item.unidad} disponibles</div>
+          </div>
+
+          <Sel label="Campo destino" value={transferItem.campo_destino} onChange={e=>setTransferItem({...transferItem,campo_destino:e.target.value})}>
+            <option value="">Seleccionar...</option>
+            {camposDisponibles.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+          </Sel>
+
+          <Inp label={`Cantidad a transferir en ${transferItem.item.unidad} (máximo ${cantOrig})`} type="number" value={transferItem.cantidad_a_mover} onChange={e=>setTransferItem({...transferItem,cantidad_a_mover:e.target.value})}/>
+
+          {existeEnDestino && (
+            <div style={{background:"#dbeafe",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#1d4ed8"}}>
+              ℹ️ Ya hay <b>{existeEnDestino.cantidad} {existeEnDestino.unidad}</b> de {transferItem.item.nombre} en {transferItem.campo_destino}. Se fusionará y el costo unitario se promediará.
+            </div>
+          )}
+          {cantMover>0 && cantMover<cantOrig && (
+            <div style={{background:"#fef9c3",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
+              Quedarán <b>{cantOrig-cantMover} {transferItem.item.unidad}</b> en {transferItem.item.ubicacion}.
+            </div>
+          )}
+          {cantMover===cantOrig && (
+            <div style={{background:"#dcfce7",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#15803d"}}>
+              ✓ Se transferirá todo el stock disponible.
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:10,marginTop:8}}>
+            <Btn variant="secondary" onClick={()=>setTransferItem(null)} full>Cancelar</Btn>
+            <Btn variant="primary" onClick={transferirInsumo} full>🔄 Transferir</Btn>
+          </div>
+        </Modal>
+        );
+      })()}
+
       {confirm&&<ConfirmModal msg="¿Eliminar este insumo?" onConfirm={()=>del(confirm)} onCancel={()=>setConfirm(null)}/>}
     </div>
   );
 }
+
 
 // ── MAQUINARIA ──────────────────────────────────────────────────────────────
 function MaquinariaPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
@@ -1958,7 +2082,7 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
 
 // ── CAMPAÑAS ────────────────────────────────────────────────────────────────
 function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
-  const EMPTY={nombre:"",cultivo:"Soja",campo:"",hectareas:"",rendimiento_obj:"",rendimiento_real:null,estado:"Activa",inicio:todayISO(),fin:null,costos:0,notas:""};
+  const EMPTY={nombre:"",cultivo:"Soja",campo:"",lotes_ids:[],hectareas:"",rendimiento_obj:"",rendimiento_real:null,estado:"Activa",inicio:todayISO(),fin:null,costos:0,notas:""};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [tab,setTab]=useState("Activas");
   const [detail,setDetail]=useState(null);
@@ -1976,6 +2100,7 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
     if(!editItem.nombre||!editItem.campo){toast("Faltan campos","error");return;}
     const row={
       nombre:editItem.nombre,cultivo:editItem.cultivo,campo:editItem.campo,
+      lotes_ids:editItem.lotes_ids||[],
       hectareas:Number(editItem.hectareas||0),rendimiento_obj:Number(editItem.rendimiento_obj||0),
       rendimiento_real:editItem.rendimiento_real?Number(editItem.rendimiento_real):null,
       estado:editItem.estado,inicio:editItem.inicio||todayISO(),fin:editItem.fin||null,
@@ -2005,6 +2130,11 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
   if(detail){
     const gastos = data.finanzas.filter(f=>f.concepto?.includes(detail.nombre)||(f.campo===detail.campo&&f.categoria==="Compra insumos"));
     const ordenesC = data.ordenes.filter(o=>o.titulo?.toLowerCase().includes(detail.nombre?.toLowerCase())||o.campo===detail.campo);
+    const campoObj = data.campos.find(co=>co.nombre===detail.campo);
+    const lotesAsignados = (detail.lotes_ids||[]).map(lid=>{
+      const l = (campoObj?.lotes_data||[]).find(x=>x.id===lid);
+      return l;
+    }).filter(Boolean);
 
     return(
       <div>
@@ -2029,6 +2159,19 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
             <KPI label="Rend. real" value={detail.rendimiento_real?`${detail.rendimiento_real} qq/ha`:"—"} color={detail.rendimiento_real?"#16a34a":"#9ca3af"}/>
             <KPI label="Costos totales" value={fmtK(gastos.reduce((s,g)=>s+Number(g.monto||0),0))} color="#ef4444"/>
           </div>
+          {lotesAsignados.length>0&&(
+            <div style={{background:"#f0fdf4",borderRadius:10,padding:"12px 16px",marginBottom:12}}>
+              <div style={{fontSize:13,fontWeight:700,marginBottom:8,color:"#15803d"}}>🗺️ Lotes asignados ({lotesAsignados.length})</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                {lotesAsignados.map(l=>(
+                  <span key={l.id} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"4px 10px",borderRadius:14,background:(l.color||"#16a34a")+"22",color:l.color||"#16a34a",fontSize:12,fontWeight:600}}>
+                    <span style={{width:8,height:8,borderRadius:"50%",background:l.color||"#16a34a"}}/>
+                    Lote {l.numero} — {l.nombre} ({l.hectareas} ha)
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
           {detail.notas&&<div style={{background:"#f9fafb",borderRadius:10,padding:"12px 16px",fontSize:14}}>📝 {detail.notas}</div>}
         </div>
 
@@ -2081,7 +2224,13 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:16}}>
-        {filtered.map(c=>(
+        {filtered.map(c=>{
+          const campoObj = data.campos.find(co=>co.nombre===c.campo);
+          const lotesAsignados = (c.lotes_ids||[]).map(lid=>{
+            const l = (campoObj?.lotes_data||[]).find(x=>x.id===lid);
+            return l;
+          }).filter(Boolean);
+          return(
           <div key={c.id} style={{background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",border:c.estado==="Activa"?"2px solid #bbf7d0":"2px solid transparent"}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:10,flexWrap:"wrap",gap:6}}>
               <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -2092,6 +2241,16 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
             </div>
             <div style={{fontWeight:700,fontSize:16,marginBottom:8}}>{c.nombre}</div>
             <div style={{fontSize:13,color:"#6b7280",marginBottom:4}}>📍 {c.campo}</div>
+            {lotesAsignados.length>0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:4,marginBottom:6}}>
+                {lotesAsignados.map(l=>(
+                  <span key={l.id} style={{display:"inline-flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:10,background:(l.color||"#16a34a")+"22",color:l.color||"#16a34a",fontSize:11,fontWeight:600}}>
+                    <span style={{width:6,height:6,borderRadius:"50%",background:l.color||"#16a34a"}}/>
+                    Lote {l.numero}
+                  </span>
+                ))}
+              </div>
+            )}
             <div style={{fontSize:12,color:"#9ca3af",marginBottom:12}}>📅 {fmtDate(c.inicio)} → {c.fin?fmtDate(c.fin):"en curso"}</div>
             <div style={{display:"flex",gap:6}}>
               <Btn variant="primary" small style={{flex:1,justifyContent:"center"}} onClick={()=>setDetail(c)}>📊 Ver detalle</Btn>
@@ -2099,10 +2258,23 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
               <DelBtn onClick={()=>setConfirm(c.id)}/>
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
 
-      {editItem&&!detail&&(
+      {editItem&&!detail&&(()=>{
+        const campoSel = data.campos.find(c=>c.nombre===editItem.campo);
+        const lotesDelCampo = campoSel?.lotes_data||[];
+        const toggleLote = id=>{
+          const curr = editItem.lotes_ids||[];
+          const nuevos = curr.includes(id)?curr.filter(x=>x!==id):[...curr,id];
+          const haCalc = nuevos.reduce((s,lid)=>{
+            const l = lotesDelCampo.find(x=>x.id===lid);
+            return s+(l?Number(l.hectareas||0):0);
+          },0);
+          setEditItem({...editItem,lotes_ids:nuevos,hectareas:haCalc?haCalc.toFixed(2):editItem.hectareas});
+        };
+        return(
         <Modal title={editItem.id?"Editar Campaña":"Nueva Campaña"} onClose={()=>setEditItem(null)}>
           <Inp label="Nombre" value={editItem.nombre} onChange={e=>setEditItem({...editItem,nombre:e.target.value})} placeholder="Ej: Soja 26/27"/>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
@@ -2113,10 +2285,35 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
               {["Activa","Cerrada"].map(s=><option key={s}>{s}</option>)}
             </Sel>
           </div>
-          <Sel label="Campo" value={editItem.campo} onChange={e=>setEditItem({...editItem,campo:e.target.value})}>
+          <Sel label="Campo" value={editItem.campo} onChange={e=>setEditItem({...editItem,campo:e.target.value,lotes_ids:[]})}>
             <option value="">Seleccionar...</option>
             {data.campos.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
           </Sel>
+
+          {editItem.campo&&(
+            <div style={{marginBottom:14}}>
+              <label style={{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:6}}>Lotes asignados a la campaña</label>
+              {lotesDelCampo.length===0
+                ? <div style={{padding:"9px 12px",borderRadius:8,border:"1.5px solid #fef3c7",background:"#fffbeb",fontSize:12,color:"#92400e"}}>Este campo no tiene lotes marcados en el mapa</div>
+                : <>
+                    <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                      {lotesDelCampo.map(l=>{
+                        const sel = (editItem.lotes_ids||[]).includes(l.id);
+                        const color = l.color||"#16a34a";
+                        return(
+                          <button key={l.id} type="button" onClick={()=>toggleLote(l.id)} style={{padding:"6px 12px",borderRadius:20,border:"1.5px solid",borderColor:sel?color:"#e5e7eb",background:sel?color+"22":"#fff",color:sel?color:"#6b7280",cursor:"pointer",fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{width:10,height:10,borderRadius:"50%",background:color,display:"inline-block"}}/>
+                            {sel?"✓ ":""}Lote {l.numero} — {l.nombre} ({l.hectareas} ha)
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div style={{fontSize:11,color:"#9ca3af",marginTop:6}}>💡 Las hectáreas se calculan automáticamente sumando los lotes seleccionados</div>
+                  </>
+              }
+            </div>
+          )}
+
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Inp label="Hectáreas" type="number" value={editItem.hectareas} onChange={e=>setEditItem({...editItem,hectareas:e.target.value})}/>
             <Inp label="Rend. objetivo (qq/ha)" type="number" value={editItem.rendimiento_obj} onChange={e=>setEditItem({...editItem,rendimiento_obj:e.target.value})}/>
@@ -2134,11 +2331,13 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
             <Btn variant="primary" onClick={save} full><I.save/> Guardar</Btn>
           </div>
         </Modal>
-      )}
+        );
+      })()}
       {confirm&&<ConfirmModal msg="¿Eliminar esta campaña?" onConfirm={()=>del(confirm)} onCancel={()=>setConfirm(null)}/>}
     </div>
   );
 }
+
 
 // ── ÓRDENES DE TRABAJO ──────────────────────────────────────────────────────
 function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
