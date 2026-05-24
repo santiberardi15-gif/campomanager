@@ -65,6 +65,8 @@ const I = {
   logout:()=><Ic d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/>,
   refresh:()=><Ic d="M23 4v6h-6M1 20v-6h6M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/>,
   check:()=><Ic d="M20 6L9 17l-5-5"/>,
+  history:()=><Ic d="M3 3v5h5M3.05 13A9 9 0 1015 3.5M12 7v5l3 2"/>,
+  download:()=><Ic d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>,
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -102,6 +104,28 @@ const fmtK = n => {
 };
 const fmtUSD = (n, dolar) => "U$ " + (Number(n||0)/dolar).toLocaleString("es-AR", {maximumFractionDigits:0});
 const todayISO = () => new Date().toISOString().split("T")[0];
+
+// Helper para registrar un movimiento en el historial
+async function registrarMovimiento(orgId, mov){
+  try {
+    await sb.from("movimientos").insert({
+      org_id: orgId,
+      fecha: mov.fecha || todayISO(),
+      tipo: mov.tipo,
+      descripcion: mov.descripcion,
+      campo_origen: mov.campo_origen || null,
+      campo_destino: mov.campo_destino || null,
+      lote_origen: mov.lote_origen || null,
+      lote_destino: mov.lote_destino || null,
+      cantidad: mov.cantidad || null,
+      unidad: mov.unidad || null,
+      monto: mov.monto || null,
+      detalles: mov.detalles || {},
+    });
+  } catch(e) {
+    console.error("Error registrando movimiento:", e);
+  }
+}
 const fmtDate = iso => {
   if (!iso) return "";
   if (iso.includes("/")) return iso;
@@ -1278,6 +1302,17 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
         lote:t.lote_destino||"",
       }).eq("id",t.original.id);
       if(error){toast(error.message,"error");return;}
+      await registrarMovimiento(orgId,{
+        tipo:"transfer_rodeo",
+        descripcion:`Rodeo "${t.original.rodeo}" (${cabezasMover} ${t.original.tipo}) transferido completo`,
+        campo_origen:t.original.campo,
+        campo_destino:t.campo_destino,
+        lote_origen:t.original.lote||null,
+        lote_destino:t.lote_destino||null,
+        cantidad:cabezasMover,
+        unidad:"cabezas",
+        detalles:{rodeo:t.original.rodeo,tipo:t.original.tipo,raza:t.original.raza,parcial:false},
+      });
       toast(`Rodeo movido a ${t.campo_destino}`);
     } else {
       const cabezasQuedan = cabezasOrig - cabezasMover;
@@ -1301,6 +1336,17 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
       };
       const {error:e2} = await sb.from("animales").insert(nuevoRodeo);
       if(e2){toast(e2.message,"error");return;}
+      await registrarMovimiento(orgId,{
+        tipo:"transfer_rodeo",
+        descripcion:`${cabezasMover} ${t.original.tipo} del rodeo "${t.original.rodeo}" transferidos (parcial)`,
+        campo_origen:t.original.campo,
+        campo_destino:t.campo_destino,
+        lote_origen:t.original.lote||null,
+        lote_destino:t.lote_destino||null,
+        cantidad:cabezasMover,
+        unidad:"cabezas",
+        detalles:{rodeo:t.original.rodeo,tipo:t.original.tipo,raza:t.original.raza,parcial:true,quedan_en_origen:cabezasQuedan},
+      });
       toast(`${cabezasMover} cab. transferidas a ${t.campo_destino}`);
     }
     setTransferItem(null); reload();
@@ -1560,10 +1606,28 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
           costo_unit:nuevoCostoUnit,
         }).eq("id",existente.id);
         await sb.from("stock").delete().eq("id",t.item.id);
+        await registrarMovimiento(orgId,{
+          tipo:"transfer_insumo",
+          descripcion:`${cantMover} ${t.item.unidad} de ${t.item.nombre} transferidos (fusión en destino)`,
+          campo_origen:t.item.ubicacion,
+          campo_destino:t.campo_destino,
+          cantidad:cantMover,
+          unidad:t.item.unidad,
+          detalles:{insumo:t.item.nombre,categoria:t.item.categoria,fusion:true,parcial:false},
+        });
         toast(`Movido y fusionado con stock existente en ${t.campo_destino}`);
       } else {
         const {error} = await sb.from("stock").update({ubicacion:t.campo_destino}).eq("id",t.item.id);
         if(error){toast(error.message,"error");return;}
+        await registrarMovimiento(orgId,{
+          tipo:"transfer_insumo",
+          descripcion:`${cantMover} ${t.item.unidad} de ${t.item.nombre} transferidos completos`,
+          campo_origen:t.item.ubicacion,
+          campo_destino:t.campo_destino,
+          cantidad:cantMover,
+          unidad:t.item.unidad,
+          detalles:{insumo:t.item.nombre,categoria:t.item.categoria,fusion:false,parcial:false},
+        });
         toast(`Insumo movido a ${t.campo_destino}`);
       }
     } else {
@@ -1600,6 +1664,15 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
         const {error:e2} = await sb.from("stock").insert(nuevoStock);
         if(e2){toast(e2.message,"error");return;}
       }
+      await registrarMovimiento(orgId,{
+        tipo:"transfer_insumo",
+        descripcion:`${cantMover} ${t.item.unidad} de ${t.item.nombre} transferidos (parcial)`,
+        campo_origen:t.item.ubicacion,
+        campo_destino:t.campo_destino,
+        cantidad:cantMover,
+        unidad:t.item.unidad,
+        detalles:{insumo:t.item.nombre,categoria:t.item.categoria,parcial:true,quedan_en_origen:cantQueda},
+      });
       toast(`${cantMover} ${t.item.unidad} transferidos a ${t.campo_destino}`);
     }
     setTransferItem(null); reload();
@@ -2962,6 +3035,349 @@ function ConfigPage({data,orgId,toast,reload,dolar,setDolar,onLogout,user}){
   );
 }
 
+
+// ════════════════════════════════════════════════════════════════════════════
+// HISTORIAL DE MOVIMIENTOS
+// ════════════════════════════════════════════════════════════════════════════
+function HistorialPage({data,orgId,toast,reload}){
+  const [periodo,setPeriodo]=useState("mes"); // mes, trimestre, semestre, ano, custom
+  const [mesRef,setMesRef]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;});
+  const [desde,setDesde]=useState("");
+  const [hasta,setHasta]=useState("");
+  const [tipoFil,setTipoFil]=useState("Todos");
+  const [campoFil,setCampoFil]=useState("Todos");
+
+  // Calcular rango de fechas según período
+  const rangoFechas = (()=>{
+    const [yStr,mStr] = mesRef.split("-");
+    const y=Number(yStr); const m=Number(mStr)-1; // 0-indexed
+    const fmt = d=>d.toISOString().split("T")[0];
+    if(periodo==="custom"){
+      return {desde:desde||"1900-01-01", hasta:hasta||"2999-12-31"};
+    }
+    if(periodo==="mes"){
+      const d1=new Date(y,m,1); const d2=new Date(y,m+1,0);
+      return {desde:fmt(d1), hasta:fmt(d2)};
+    }
+    if(periodo==="trimestre"){
+      const q=Math.floor(m/3); const d1=new Date(y,q*3,1); const d2=new Date(y,q*3+3,0);
+      return {desde:fmt(d1), hasta:fmt(d2)};
+    }
+    if(periodo==="semestre"){
+      const h=m<6?0:6; const d1=new Date(y,h,1); const d2=new Date(y,h+6,0);
+      return {desde:fmt(d1), hasta:fmt(d2)};
+    }
+    if(periodo==="ano"){
+      const d1=new Date(y,0,1); const d2=new Date(y,11,31);
+      return {desde:fmt(d1), hasta:fmt(d2)};
+    }
+    return {desde:"1900-01-01", hasta:"2999-12-31"};
+  })();
+
+  // Construir lista unificada de eventos
+  const eventos = (()=>{
+    const evs = [];
+
+    // Movimientos manuales (transferencias)
+    (data.movimientos||[]).forEach(m=>{
+      evs.push({
+        fecha:m.fecha,
+        tipo:m.tipo,
+        tipo_label: m.tipo==="transfer_rodeo"?"🔄 Transferencia rodeo":m.tipo==="transfer_insumo"?"🔄 Transferencia insumo":m.tipo,
+        descripcion:m.descripcion,
+        campo: m.campo_origen && m.campo_destino ? `${m.campo_origen} → ${m.campo_destino}` : (m.campo_origen||m.campo_destino||""),
+        cantidad: m.cantidad ? `${m.cantidad} ${m.unidad||""}`.trim() : "",
+        monto: m.monto||null,
+        detalles:m.detalles||{},
+      });
+    });
+
+    // Finanzas (compras, gastos)
+    (data.finanzas||[]).forEach(f=>{
+      let icon = "💸";
+      if(f.categoria==="Compra insumos") icon="📦";
+      else if(f.categoria==="Compra hacienda") icon="🐄";
+      else if(f.tipo==="Ingreso") icon="💰";
+      evs.push({
+        fecha:f.fecha,
+        tipo: f.tipo==="Ingreso"?"ingreso":"egreso",
+        tipo_label: `${icon} ${f.tipo}`,
+        descripcion: f.concepto,
+        campo: f.campo||"",
+        cantidad: "",
+        monto: Number(f.monto||0)*(f.tipo==="Egreso"?-1:1),
+        detalles:{categoria:f.categoria,origen:f.origen},
+      });
+    });
+
+    // Lluvias
+    (data.lluvias||[]).forEach(l=>{
+      evs.push({
+        fecha:l.fecha,
+        tipo:"lluvia",
+        tipo_label:"🌧️ Lluvia",
+        descripcion:`${l.mm} mm registrados${l.observaciones?` — ${l.observaciones}`:""}`,
+        campo:l.campo||"",
+        cantidad:`${l.mm} mm`,
+        monto:null,
+        detalles:{mm:Number(l.mm||0)},
+      });
+    });
+
+    // Órdenes completadas
+    (data.ordenes||[]).filter(o=>o.estado==="Completada").forEach(o=>{
+      evs.push({
+        fecha:o.fecha,
+        tipo:"orden_completada",
+        tipo_label:`✅ Orden completada`,
+        descripcion:`${o.tipo}: ${o.titulo}`,
+        campo:o.campo||"",
+        cantidad:"",
+        monto:null,
+        detalles:{responsable:o.responsable,prioridad:o.prioridad,insumos:o.insumos_usados||[]},
+      });
+    });
+
+    // Campañas iniciadas
+    (data.campanas||[]).forEach(c=>{
+      if(c.inicio){
+        evs.push({
+          fecha:c.inicio,
+          tipo:"campana_inicio",
+          tipo_label:"🌱 Inicio de campaña",
+          descripcion:`${c.nombre} (${c.cultivo}) — ${c.hectareas} ha`,
+          campo:c.campo||"",
+          cantidad:`${c.hectareas} ha`,
+          monto:null,
+          detalles:{cultivo:c.cultivo,rendimiento_obj:c.rendimiento_obj},
+        });
+      }
+      if(c.fin && c.estado==="Cerrada"){
+        evs.push({
+          fecha:c.fin,
+          tipo:"campana_cierre",
+          tipo_label:"🏁 Cierre de campaña",
+          descripcion:`${c.nombre} (${c.cultivo}) cerrada${c.rendimiento_real?` — rend. real ${c.rendimiento_real} qq/ha`:""}`,
+          campo:c.campo||"",
+          cantidad:`${c.hectareas} ha`,
+          monto:null,
+          detalles:{cultivo:c.cultivo,rendimiento_real:c.rendimiento_real},
+        });
+      }
+    });
+
+    // Alta de rodeos
+    (data.animales||[]).forEach(a=>{
+      if(a.fecha){
+        evs.push({
+          fecha:a.fecha,
+          tipo:"alta_rodeo",
+          tipo_label:"🐄 Alta de rodeo",
+          descripcion:`Rodeo "${a.rodeo}" formado con ${a.cabezas} ${a.tipo} (${a.raza})`,
+          campo:a.campo||"",
+          cantidad:`${a.cabezas} cab.`,
+          monto:Number(a.costo||0)*-1,
+          detalles:{tipo:a.tipo,raza:a.raza,cabezas:a.cabezas},
+        });
+      }
+    });
+
+    return evs;
+  })();
+
+  // Filtrar por rango y filtros
+  const eventosFiltrados = eventos
+    .filter(e=>e.fecha>=rangoFechas.desde && e.fecha<=rangoFechas.hasta)
+    .filter(e=>tipoFil==="Todos" || e.tipo===tipoFil || e.tipo_label.includes(tipoFil))
+    .filter(e=>campoFil==="Todos" || (e.campo||"").includes(campoFil))
+    .sort((a,b)=>b.fecha.localeCompare(a.fecha));
+
+  // Tipos disponibles para el filtro
+  const tiposDisponibles = [...new Set(eventos.map(e=>e.tipo_label))];
+
+  // ── Generadores de descarga ────────────────────────────────────────────────
+  const labelPeriodo = (()=>{
+    if(periodo==="custom") return `${desde||"inicio"}_a_${hasta||"hoy"}`;
+    if(periodo==="mes") return `${mesRef}`;
+    if(periodo==="trimestre"){const [y,m]=mesRef.split("-");const q=Math.floor((Number(m)-1)/3)+1;return `${y}_T${q}`;}
+    if(periodo==="semestre"){const [y,m]=mesRef.split("-");const s=Number(m)<=6?1:2;return `${y}_S${s}`;}
+    if(periodo==="ano") return mesRef.split("-")[0];
+    return "historial";
+  })();
+
+  const descargarCSV = ()=>{
+    const headers = ["Fecha","Tipo","Descripción","Campo","Cantidad","Monto"];
+    const rows = eventosFiltrados.map(e=>[
+      e.fecha,
+      e.tipo_label.replace(/[🔄💸📦🐄💰🌧️✅🌱🏁]/g,"").trim(),
+      `"${(e.descripcion||"").replace(/"/g,'""')}"`,
+      `"${(e.campo||"").replace(/"/g,'""')}"`,
+      e.cantidad||"",
+      e.monto!=null?e.monto:"",
+    ].join(","));
+    const csv = [headers.join(","),...rows].join("\n");
+    const blob = new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `historial_${labelPeriodo}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  const descargarTXT = ()=>{
+    let txt = `HISTORIAL DE MOVIMIENTOS\n`;
+    txt += `Período: ${rangoFechas.desde} a ${rangoFechas.hasta}\n`;
+    txt += `Total de eventos: ${eventosFiltrados.length}\n`;
+    txt += `${"=".repeat(70)}\n\n`;
+
+    // Agrupar por mes
+    const porMes = {};
+    eventosFiltrados.forEach(e=>{
+      const ym = e.fecha.substring(0,7);
+      (porMes[ym]=porMes[ym]||[]).push(e);
+    });
+
+    Object.keys(porMes).sort().reverse().forEach(ym=>{
+      const [y,m] = ym.split("-");
+      const nombreMes = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"][Number(m)-1];
+      txt += `\n### ${nombreMes} ${y} (${porMes[ym].length} eventos)\n`;
+      porMes[ym].forEach(e=>{
+        txt += `- [${e.fecha}] ${e.tipo_label} `;
+        if(e.campo) txt += `(${e.campo}) `;
+        txt += `— ${e.descripcion}`;
+        if(e.cantidad) txt += ` [${e.cantidad}]`;
+        if(e.monto!=null) txt += ` [${e.monto<0?"-":""}$${Math.abs(e.monto).toLocaleString("es-AR")}]`;
+        txt += `\n`;
+      });
+    });
+
+    // Resumen agregado
+    txt += `\n${"=".repeat(70)}\nRESUMEN DEL PERÍODO\n${"=".repeat(70)}\n`;
+    const egresoTotal = eventosFiltrados.filter(e=>e.monto<0).reduce((s,e)=>s+Math.abs(e.monto),0);
+    const ingresoTotal = eventosFiltrados.filter(e=>e.monto>0).reduce((s,e)=>s+e.monto,0);
+    const lluviaTotal = eventosFiltrados.filter(e=>e.tipo==="lluvia").reduce((s,e)=>s+(e.detalles?.mm||0),0);
+    const transferRodeos = eventosFiltrados.filter(e=>e.tipo==="transfer_rodeo").length;
+    const transferInsumos = eventosFiltrados.filter(e=>e.tipo==="transfer_insumo").length;
+    const ordenesComp = eventosFiltrados.filter(e=>e.tipo==="orden_completada").length;
+
+    txt += `- Egresos totales: $${egresoTotal.toLocaleString("es-AR")}\n`;
+    txt += `- Ingresos totales: $${ingresoTotal.toLocaleString("es-AR")}\n`;
+    txt += `- Balance neto: $${(ingresoTotal-egresoTotal).toLocaleString("es-AR")}\n`;
+    txt += `- Lluvia acumulada: ${lluviaTotal} mm\n`;
+    txt += `- Transferencias de rodeos: ${transferRodeos}\n`;
+    txt += `- Transferencias de insumos: ${transferInsumos}\n`;
+    txt += `- Órdenes completadas: ${ordenesComp}\n`;
+
+    const blob = new Blob([txt],{type:"text/plain;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `historial_${labelPeriodo}.txt`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  const descargarJSON = ()=>{
+    const obj = {
+      generado: new Date().toISOString(),
+      periodo: {desde:rangoFechas.desde, hasta:rangoFechas.hasta, label:labelPeriodo},
+      total_eventos: eventosFiltrados.length,
+      eventos: eventosFiltrados,
+    };
+    const blob = new Blob([JSON.stringify(obj,null,2)],{type:"application/json;charset=utf-8;"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = `historial_${labelPeriodo}.json`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  // Total monto
+  const totalEgreso = eventosFiltrados.filter(e=>e.monto<0).reduce((s,e)=>s+Math.abs(e.monto),0);
+  const totalIngreso = eventosFiltrados.filter(e=>e.monto>0).reduce((s,e)=>s+e.monto,0);
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+        <KPI label="Eventos en período" value={eventosFiltrados.length}/>
+        <KPI label="Egresos" value={fmtK(totalEgreso)} color="#ef4444"/>
+        <KPI label="Ingresos" value={fmtK(totalIngreso)} color="#16a34a"/>
+        <KPI label="Balance" value={fmtK(totalIngreso-totalEgreso)} color={totalIngreso>=totalEgreso?"#16a34a":"#ef4444"}/>
+      </div>
+
+      {/* Selector de período */}
+      <div style={{background:"#fff",borderRadius:14,padding:16,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+        <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+          {[
+            {id:"mes",label:"Mes"},
+            {id:"trimestre",label:"Trimestre"},
+            {id:"semestre",label:"Semestre"},
+            {id:"ano",label:"Año"},
+            {id:"custom",label:"Custom"},
+          ].map(p=>(
+            <button key={p.id} onClick={()=>setPeriodo(p.id)} style={{padding:"6px 14px",borderRadius:20,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,background:periodo===p.id?"#16a34a":"#f3f4f6",color:periodo===p.id?"#fff":"#374151"}}>{p.label}</button>
+          ))}
+        </div>
+
+        {periodo!=="custom" ? (
+          <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+            <input type="month" value={mesRef} onChange={e=>setMesRef(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}}/>
+            <span style={{fontSize:12,color:"#6b7280"}}>
+              📅 {rangoFechas.desde} → {rangoFechas.hasta}
+            </span>
+          </div>
+        ):(
+          <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+            <input type="date" value={desde} onChange={e=>setDesde(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}}/>
+            <span style={{fontSize:12,color:"#6b7280"}}>a</span>
+            <input type="date" value={hasta} onChange={e=>setHasta(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}}/>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:8,marginTop:12,flexWrap:"wrap"}}>
+          <select value={tipoFil} onChange={e=>setTipoFil(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#fff"}}>
+            <option value="Todos">Todos los tipos</option>
+            {tiposDisponibles.map(t=><option key={t}>{t}</option>)}
+          </select>
+          <select value={campoFil} onChange={e=>setCampoFil(e.target.value)} style={{padding:"7px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#fff"}}>
+            <option>Todos</option>
+            {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
+          </select>
+        </div>
+
+        <div style={{display:"flex",gap:8,marginTop:14,flexWrap:"wrap"}}>
+          <Btn variant="primary" small onClick={descargarTXT}><I.download/> Descargar TXT (para IA)</Btn>
+          <Btn variant="secondary" small onClick={descargarCSV}><I.download/> Descargar CSV</Btn>
+          <Btn variant="secondary" small onClick={descargarJSON}><I.download/> Descargar JSON</Btn>
+        </div>
+      </div>
+
+      {/* Lista de eventos */}
+      <div style={{background:"#fff",borderRadius:14,padding:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+        {eventosFiltrados.length===0
+          ? <div style={{textAlign:"center",padding:"40px 20px",color:"#9ca3af"}}>
+              <div style={{fontSize:14}}>No hay eventos en este período con los filtros seleccionados</div>
+            </div>
+          : <div>
+              {eventosFiltrados.map((e,i)=>(
+                <div key={i} style={{display:"flex",gap:12,padding:"12px 0",borderBottom:i===eventosFiltrados.length-1?"none":"1px solid #f3f4f6",alignItems:"flex-start",flexWrap:"wrap"}}>
+                  <div style={{minWidth:90,fontSize:12,color:"#6b7280",fontWeight:600}}>{fmtDate(e.fecha)}</div>
+                  <div style={{flex:1,minWidth:200}}>
+                    <div style={{fontSize:13,fontWeight:700,marginBottom:2}}>{e.tipo_label}</div>
+                    <div style={{fontSize:13,color:"#374151"}}>{e.descripcion}</div>
+                    {e.campo && <div style={{fontSize:11,color:"#9ca3af",marginTop:2}}>📍 {e.campo}</div>}
+                  </div>
+                  <div style={{textAlign:"right",minWidth:100}}>
+                    {e.cantidad && <div style={{fontSize:12,color:"#6b7280"}}>{e.cantidad}</div>}
+                    {e.monto!=null && <div style={{fontSize:13,fontWeight:700,color:e.monto>=0?"#16a34a":"#ef4444"}}>
+                      {e.monto>=0?"+":"-"}{fmtK(Math.abs(e.monto))}
+                    </div>}
+                  </div>
+                </div>
+              ))}
+            </div>
+        }
+      </div>
+    </div>
+  );
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════
@@ -2979,6 +3395,7 @@ const NAV=[
   {group:"OPERACIONES",items:[
     {id:"ordenes",label:"Órdenes",icon:I.clipboard},
     {id:"documentos",label:"Documentos",icon:I.file},
+    {id:"historial",label:"Historial",icon:I.history},
   ]},
   {group:"EQUIPO",items:[
     {id:"colaboradores",label:"Colaboradores",icon:I.users},
@@ -2987,7 +3404,7 @@ const NAV=[
     {id:"config",label:"Configuración",icon:I.settings},
   ]},
 ];
-const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",colaboradores:"Colaboradores",config:"Configuración"};
+const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",historial:"Historial de Movimientos",colaboradores:"Colaboradores",config:"Configuración"};
 
 const TopActions=({page,onAction,miRol})=>{
   const map={
@@ -3008,7 +3425,7 @@ export default function App(){
   const [miRol,setMiRol]=useState(null);
   const [miMiembroId,setMiMiembroId]=useState(null);
   const [loadingAuth,setLoadingAuth]=useState(true);
-  const [data,setData]=useState({campos:[],stock:[],animales:[],campanas:[],maquinaria:[],lluvias:[],finanzas:[],ordenes:[],documentos:[],colaboradores:[],miembros:[],notificaciones:[]});
+  const [data,setData]=useState({campos:[],stock:[],animales:[],campanas:[],maquinaria:[],lluvias:[],finanzas:[],ordenes:[],documentos:[],colaboradores:[],miembros:[],notificaciones:[],movimientos:[]});
   const [dolar,setDolar]=useState(1420);
   const [page,setPage]=useState("resumen");
   const [sidebarOpen,setSidebarOpen]=useState(true);
@@ -3046,7 +3463,7 @@ export default function App(){
   // LOAD DATA
   const reload = useCallback(async ()=>{
     if(!orgId) return;
-    const tables = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores","miembros","notificaciones"];
+    const tables = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores","miembros","notificaciones","movimientos"];
     const results = await Promise.all(tables.map(t=>sb.from(t).select("*").eq("org_id",orgId)));
     const newData = {};
     tables.forEach((t,i)=>{newData[t]=results[i].data||[];});
@@ -3139,6 +3556,7 @@ export default function App(){
     finanzas:<FinanzasPage {...props}/>,
     ordenes:<OrdenesPage {...props}/>,
     documentos:<DocumentosPage {...props}/>,
+    historial:<HistorialPage {...props}/>,
     colaboradores:<ColaboradoresPage {...props}/>,
     config:<ConfigPage {...props} setDolar={setDolar} onLogout={onLogout} user={user}/>,
   };
