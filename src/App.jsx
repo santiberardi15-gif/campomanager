@@ -1209,6 +1209,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [search,setSearch]=useState("");
   const [campoFil,setCampoFil]=useState("Todos");
+  const [transferItem,setTransferItem]=useState(null);
 
   const filtered=data.animales.filter(a=>{
     const matchSearch = a.rodeo?.toLowerCase().includes(search.toLowerCase())||a.campo?.toLowerCase().includes(search.toLowerCase())||a.raza?.toLowerCase().includes(search.toLowerCase());
@@ -1260,6 +1261,54 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
     if(error){toast(error.message,"error");return;}
     setConfirm(null); toast("Rodeo eliminado"); reload();
   };
+  const transferirRodeo = async ()=>{
+  const t = transferItem;
+  if(!t.campo_destino){toast("Elegí el campo destino","error");return;}
+  if(t.campo_destino===t.original.campo && (t.lote_destino||"")===(t.original.lote||"")){
+    toast("El destino es igual al origen","error");return;
+  }
+  const cabezasMover = Number(t.cabezas_a_mover);
+  const cabezasOrig = Number(t.original.cabezas);
+  if(!cabezasMover || cabezasMover<=0 || cabezasMover>cabezasOrig){
+    toast("Cantidad de cabezas inválida","error");return;
+  }
+  const cpc = Number(t.original.costo_por_cabeza||0);
+
+  if(cabezasMover===cabezasOrig){
+    // Mover el rodeo completo: solo cambiar campo y lote
+    const {error} = await sb.from("animales").update({
+      campo:t.campo_destino,
+      lote:t.lote_destino||"",
+    }).eq("id",t.original.id);
+    if(error){toast(error.message,"error");return;}
+    toast(`Rodeo movido a ${t.campo_destino}`);
+  } else {
+    // Partir: reducir el origen e insertar uno nuevo en el destino
+    const cabezasQuedan = cabezasOrig - cabezasMover;
+    const {error:e1} = await sb.from("animales").update({
+      cabezas:cabezasQuedan,
+      costo:cabezasQuedan*cpc,
+    }).eq("id",t.original.id);
+    if(e1){toast(e1.message,"error");return;}
+
+    const nuevoRodeo = {
+      rodeo:t.original.rodeo,
+      campo:t.campo_destino,
+      lote:t.lote_destino||"",
+      tipo:t.original.tipo,
+      raza:t.original.raza,
+      cabezas:cabezasMover,
+      costo_por_cabeza:cpc,
+      costo:cabezasMover*cpc,
+      fecha:t.original.fecha,
+      org_id:orgId,
+    };
+    const {error:e2} = await sb.from("animales").insert(nuevoRodeo);
+    if(e2){toast(e2.message,"error");return;}
+    toast(`${cabezasMover} cab. transferidas a ${t.campo_destino}`);
+  }
+  setTransferItem(null); reload();
+};
 
   return(
     <div>
@@ -1303,13 +1352,16 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                   <td style={{padding:"12px",fontSize:12,color:"#6b7280"}}>{fmtDate(a.fecha)}</td>
                   <td style={{padding:"12px"}}>
                     <div style={{display:"flex",gap:4}}>
-                      <EditBtn onClick={()=>{
-                        const razaPredef = RAZAS_PREDEFINIDAS.includes(a.raza);
-                        setEditItem({...a,id_real:a.id,raza:razaPredef?a.raza:"Otra",razaCustom:razaPredef?"":a.raza});
-                      }}/>
-                      <DelBtn onClick={()=>setConfirm(a.id)}/>
+                      <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
+                      <EditOnly><Btn variant="ghost" small onClick={()=>setTransferItem({
+                        item:s,
+                        campo_destino:"",
+                        cantidad_a_mover:s.cantidad,
+                      })} title="Transferir a otro campo">🔄</Btn></EditOnly>
+                      <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
+                      <DelBtn onClick={()=>setConfirm(s.id)}/>
                     </div>
-                  </td>
+                </td>
                 </tr>
               ))}
             </tbody>
@@ -1368,6 +1420,54 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
         </Modal>
         );
       })()}
+      {transferItem&&(()=>{
+  const camposDisponibles = data.campos.filter(c=>c.nombre!==transferItem.item.ubicacion);
+  const cantMover = Number(transferItem.cantidad_a_mover)||0;
+  const cantOrig = Number(transferItem.item.cantidad);
+  const existeEnDestino = transferItem.campo_destino && data.stock.find(s=>
+    s.id!==transferItem.item.id &&
+    s.ubicacion===transferItem.campo_destino &&
+    s.nombre===transferItem.item.nombre &&
+    s.categoria===transferItem.item.categoria &&
+    s.unidad===transferItem.item.unidad
+  );
+  return(
+  <Modal title={`Transferir ${transferItem.item.nombre}`} onClose={()=>setTransferItem(null)}>
+    <div style={{background:"#f9fafb",borderRadius:10,padding:12,marginBottom:14,fontSize:13}}>
+      <div style={{marginBottom:4}}>📍 <b>Origen:</b> {transferItem.item.ubicacion||"Sin asignar"}</div>
+      <div>📦 <b>{transferItem.item.cantidad}</b> {transferItem.item.unidad} disponibles</div>
+    </div>
+
+    <Sel label="Campo destino" value={transferItem.campo_destino} onChange={e=>setTransferItem({...transferItem,campo_destino:e.target.value})}>
+      <option value="">Seleccionar...</option>
+      {camposDisponibles.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+    </Sel>
+
+    <Inp label={`Cantidad a transferir en ${transferItem.item.unidad} (máximo ${cantOrig})`} type="number" value={transferItem.cantidad_a_mover} onChange={e=>setTransferItem({...transferItem,cantidad_a_mover:e.target.value})}/>
+
+    {existeEnDestino && (
+      <div style={{background:"#dbeafe",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#1d4ed8"}}>
+        ℹ️ Ya hay <b>{existeEnDestino.cantidad} {existeEnDestino.unidad}</b> de {transferItem.item.nombre} en {transferItem.campo_destino}. Se fusionará y el costo unitario se promediará.
+      </div>
+    )}
+    {cantMover>0 && cantMover<cantOrig && (
+      <div style={{background:"#fef9c3",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
+        Quedarán <b>{cantOrig-cantMover} {transferItem.item.unidad}</b> en {transferItem.item.ubicacion}.
+      </div>
+    )}
+    {cantMover===cantOrig && (
+      <div style={{background:"#dcfce7",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#15803d"}}>
+        ✓ Se transferirá todo el stock disponible.
+      </div>
+    )}
+
+    <div style={{display:"flex",gap:10,marginTop:8}}>
+      <Btn variant="secondary" onClick={()=>setTransferItem(null)} full>Cancelar</Btn>
+      <Btn variant="primary" onClick={transferirInsumo} full>🔄 Transferir</Btn>
+    </div>
+  </Modal>
+  );
+})()}
       {confirm&&<ConfirmModal msg="¿Eliminar este rodeo?" onConfirm={()=>del(confirm)} onCancel={()=>setConfirm(null)}/>}
     </div>
   );
@@ -1493,13 +1593,18 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                       </div>
                     </td>
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
-                    <td style={{padding:"12px"}}>
-                      <div style={{display:"flex",gap:4}}>
-                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
-                        <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
-                        <DelBtn onClick={()=>setConfirm(s.id)}/>
-                      </div>
-                    </td>
+                   <td style={{padding:"12px"}}>
+                    <div style={{display:"flex",gap:4}}>
+                      <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
+                      <EditOnly><Btn variant="ghost" small onClick={()=>setTransferItem({
+                        item:s,
+                        campo_destino:"",
+                        cantidad_a_mover:s.cantidad,
+                      })} title="Transferir a otro campo">🔄</Btn></EditOnly>
+                      <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
+                      <DelBtn onClick={()=>setConfirm(s.id)}/>
+                    </div>
+                  </td>
                   </tr>
                 );
               })}
