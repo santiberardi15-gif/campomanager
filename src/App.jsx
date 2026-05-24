@@ -727,8 +727,35 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
 //    por el código de abajo.
 // ══════════════════════════════════════════════════════════════════════════
 
-// ── MAPA DE LOTES INTERACTIVO con detección IA ─────────────────────────────
-// ── MAPA DE LOTES SATELITAL — Dibujá polígonos sobre el campo ──────────────
+// ════════════════════════════════════════════════════════════════════════════
+// LotesMapa — versión corregida
+// Reemplaza en tu App.jsx la función LotesMapa completa (de línea ~732 a ~1123,
+// desde "function LotesMapa(...)" hasta su "}" final, antes de "// ── ANIMALES ──").
+//
+// Arregla:
+//  1. No se podían dibujar varios lotes seguidos (la closure del handler
+//     CREATED quedaba con un campo.lotes_data viejo) → ahora usa un ref
+//     siempre sincronizado.
+//  2. Al volver a entrar al campo no se veían los polígonos guardados (el
+//     useEffect de render salía temprano porque Leaflet aún no había
+//     terminado de cargar) → ahora dispara con un flag mapReady.
+//  3. Todos los lotes salían verdes → ahora cada lote tiene su color,
+//     elegible con un selector de paleta en el modal de edición.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Paleta de colores predefinida (definila FUERA de la función, junto al
+// resto de constantes, o al inicio del archivo).
+const COLORES_LOTE = [
+  { value: "#16a34a", label: "Verde" },
+  { value: "#3b82f6", label: "Azul" },
+  { value: "#f97316", label: "Naranja" },
+  { value: "#ef4444", label: "Rojo" },
+  { value: "#a855f7", label: "Púrpura" },
+  { value: "#eab308", label: "Amarillo" },
+  { value: "#06b6d4", label: "Cyan" },
+  { value: "#ec4899", label: "Rosa" },
+];
+
 function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
   const [selected, setSelected] = useState(null);
   const [editLote, setEditLote] = useState(null);
@@ -736,11 +763,20 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
   const [mapMsg, setMapMsg] = useState(null);
+  const [mapReady, setMapReady] = useState(false); // 🆕 dispara el re-render cuando leaflet termina de cargar
+
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const drawnItemsRef = useRef(null);
   const labelsLayerRef = useRef(null);
   const LRef = useRef(null);
+
+  // 🆕 Refs SIEMPRE sincronizados con el último valor. Los handlers de Draw
+  // los leen para no caer en closures stale.
+  const lotesDataRef = useRef(campo.lotes_data || []);
+  const onUpdateRef = useRef(onUpdate);
+  useEffect(() => { lotesDataRef.current = campo.lotes_data || []; }, [campo.lotes_data]);
+  useEffect(() => { onUpdateRef.current = onUpdate; }, [onUpdate]);
 
   const lotes = campo.lotes_data || [];
 
@@ -749,6 +785,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
     setTimeout(() => setMapMsg(null), 4000);
   };
 
+  // ── Montaje del mapa (corre una sola vez) ────────────────────────────────
   useEffect(() => {
     let mounted = true;
     let mapInstance = null;
@@ -756,16 +793,13 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
     const loadLeaflet = async () => {
       const L = (await import("leaflet")).default;
       await import("leaflet-draw");
+
       // FIX: parchear bug de readableArea en leaflet-draw 1.0.4
-// (rompe la cadena de clicks al agregar el 2do/3er vértice)
       if (L.GeometryUtil && L.GeometryUtil.readableArea) {
         const orig = L.GeometryUtil.readableArea;
-        L.GeometryUtil.readableArea = function(area, isMetric, precision) {
-          try {
-            return orig.call(this, area, isMetric, precision);
-          } catch (e) {
-            return (area / 10000).toFixed(2) + ' ha';
-          }
+        L.GeometryUtil.readableArea = function (area, isMetric, precision) {
+          try { return orig.call(this, area, isMetric, precision); }
+          catch (e) { return (area / 10000).toFixed(2) + " ha"; }
         };
       }
       const turf = await import("@turf/turf");
@@ -782,7 +816,8 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
 
       let center = [-34.6, -63.0];
       let zoom = 6;
-      const lotesConCoords = lotes.filter(l => l.coords && l.coords.length > 0);
+      const lotesIniciales = lotesDataRef.current;
+      const lotesConCoords = lotesIniciales.filter(l => l.coords && l.coords.length > 0);
       if (lotesConCoords.length > 0) {
         const allPoints = lotesConCoords.flatMap(l => l.coords);
         const avgLat = allPoints.reduce((s, p) => s + p[0], 0) / allPoints.length;
@@ -799,16 +834,13 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
         { attribution: "Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics", maxZoom: 19 }
       ).addTo(mapInstance);
 
-      // ── FIX 1: parchear maxPoints ANTES de crear el control ──
       if (L.Draw && L.Draw.Polygon) {
         L.Draw.Polygon.mergeOptions({ maxPoints: 0 });
       }
 
-      // drawnItems: polígonos de lotes existentes (el botón Edit actúa sobre ellos)
       const drawnItems = L.featureGroup().addTo(mapInstance);
       drawnItemsRef.current = drawnItems;
 
-      // labelsLayer: solo los marcadores numéricos
       const labelsLayer = L.featureGroup().addTo(mapInstance);
       labelsLayerRef.current = labelsLayer;
 
@@ -832,7 +864,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
       });
       mapInstance.addControl(drawControl);
 
-      // ── FIX 2: Enter para terminar el polígono ──
+      // Enter para terminar el polígono
       const container = mapInstance.getContainer();
       container.setAttribute("tabindex", "0");
       container.addEventListener("keydown", (e) => {
@@ -844,10 +876,9 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
         if (typeof handler.completeShape === "function") handler.completeShape();
         else if (typeof handler._finishShape === "function") handler._finishShape();
       });
-      // Darle foco al mapa cuando el usuario empieza a dibujar
       mapInstance.on("draw:drawstart", () => container.focus());
 
-      // ── CREATED: nuevo polígono dibujado ──
+      // ── CREATED — usa REFS, no closures viejas ─────────────────────────
       mapInstance.on(L.Draw.Event.CREATED, (e) => {
         const layer = e.layer;
         const raw = layer.getLatLngs()[0];
@@ -856,8 +887,9 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
         const ring = [...coords.map(c => [c[1], c[0]]), [coords[0][1], coords[0][0]]];
         const newPoly = turf.polygon([ring]);
 
-        // ── FIX 3: verificar solapamiento ──
-        const currentLotes = campo.lotes_data || [];
+        // ✅ Lee la versión más reciente, no la del primer render
+        const currentLotes = lotesDataRef.current;
+
         const hasOverlap = currentLotes.some(lote => {
           if (!lote.coords || lote.coords.length < 3) return false;
           try {
@@ -875,20 +907,25 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
         const hectareas = (areaM2 / 10000).toFixed(2);
         const centroid = turf.centroid(newPoly).geometry.coordinates;
         const num = currentLotes.length + 1;
-        onUpdate([...currentLotes, {
+
+        // 🆕 Color cíclico de la paleta según el índice
+        const color = COLORES_LOTE[currentLotes.length % COLORES_LOTE.length].value;
+
+        onUpdateRef.current([...currentLotes, {
           id: Date.now(),
           numero: num,
           nombre: `Lote ${num}`,
           cultivo: "",
+          color,
           hectareas,
           coords,
           centro: [centroid[1], centroid[0]],
         }]);
       });
 
-      // ── FIX 4: EDITED — actualizar coords de lotes editados ──
+      // ── EDITED — también usa refs ──────────────────────────────────────
       mapInstance.on(L.Draw.Event.EDITED, (e) => {
-        const currentLotes = [...(campo.lotes_data || [])];
+        const currentLotes = [...lotesDataRef.current];
         e.layers.eachLayer((layer) => {
           const loteId = layer.options._loteId;
           if (!loteId) return;
@@ -906,8 +943,11 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
             centro: [centroid[1], centroid[0]],
           };
         });
-        onUpdate(currentLotes);
+        onUpdateRef.current(currentLotes);
       });
+
+      // 🆕 Avisar al useEffect de render que Leaflet ya está listo
+      setMapReady(true);
     };
 
     loadLeaflet();
@@ -918,9 +958,11 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
     // eslint-disable-next-line
   }, []);
 
-  // ── Re-render lotes ────────────────────────────────────────────────────────
+  // ── Re-render de lotes existentes ─────────────────────────────────────────
+  // 🆕 Agregado mapReady a las deps: corre una vez que el mapa ya cargó,
+  // así los polígonos guardados aparecen al abrir el campo.
   useEffect(() => {
-    if (!LRef.current || !drawnItemsRef.current || !labelsLayerRef.current) return;
+    if (!mapReady || !LRef.current || !drawnItemsRef.current || !labelsLayerRef.current) return;
     const { L } = LRef.current;
     const drawnItems = drawnItemsRef.current;
     const labelsLayer = labelsLayerRef.current;
@@ -928,13 +970,16 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
     drawnItems.clearLayers();
     labelsLayer.clearLayers();
 
-    lotes.forEach((lote) => {
+    lotes.forEach((lote, idx) => {
       if (!lote.coords || lote.coords.length < 3) return;
 
-      // Polígono con _loteId para que EDITED sepa cuál es cuál
+      // 🆕 Cada lote usa su propio color (fallback al color cíclico si no lo tiene)
+      const color = lote.color || COLORES_LOTE[idx % COLORES_LOTE.length].value;
+
       const polygon = L.polygon(lote.coords, {
-        color: "#16a34a",
+        color,
         weight: 2,
+        fillColor: color,
         fillOpacity: 0.4,
         _loteId: lote.id,
       });
@@ -947,7 +992,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
       if (lote.centro) {
         const labelIcon = L.divIcon({
           className: "lote-label",
-          html: `<div style="background:#16a34a;color:#fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3)">${lote.numero}</div>`,
+          html: `<div style="background:${color};color:#fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3)">${lote.numero}</div>`,
           iconSize: [30, 30],
           iconAnchor: [15, 15],
         });
@@ -961,7 +1006,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
       try { mapRef.current.fitBounds(drawnItems.getBounds(), { padding: [40, 40] }); } catch {}
     }
     // eslint-disable-next-line
-  }, [campo.lotes_data]);
+  }, [campo.lotes_data, mapReady]);
 
   // ── Buscar localidad ───────────────────────────────────────────────────────
   const buscarLocalidad = async () => {
@@ -1029,7 +1074,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
       </EditOnly>
 
       <div style={{ background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: "#15803d" }}>
-        💡 <b>Cómo usar:</b> 1) Buscá tu localidad arriba o navegá el mapa con el mouse. 2) Usá los botones de la esquina superior derecha del mapa para <b>dibujar el contorno de cada lote</b>. 3) Las hectáreas se calculan solas. Terminá el polígono con <b>doble click</b> o <b>Enter</b>. {lotes.length} lote(s) marcado(s).
+        💡 <b>Cómo usar:</b> 1) Buscá tu localidad arriba o navegá el mapa con el mouse. 2) Usá los botones de la esquina superior derecha del mapa para <b>dibujar el contorno de cada lote</b>. 3) Las hectáreas se calculan solas. Terminá el polígono con <b>doble click</b> o <b>Enter</b>. Podés dibujar varios lotes uno detrás del otro. {lotes.length} lote(s) marcado(s).
       </div>
 
       {mapMsg && (
@@ -1047,26 +1092,33 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                  {["#", "Nombre", "Cultivo", "Hectáreas", ""].map(h => (
-                    <th key={h} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, color: "#6b7280" }}>{h}</th>
+                  {["", "#", "Nombre", "Cultivo", "Hectáreas", ""].map((h, i) => (
+                    <th key={i} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, color: "#6b7280" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {lotes.map(l => (
-                  <tr key={l.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
-                    <td style={{ padding: "6px 10px", fontWeight: 700, color: "#16a34a" }}>{l.numero}</td>
-                    <td style={{ padding: "6px 10px", fontSize: 13 }}>{l.nombre}</td>
-                    <td style={{ padding: "6px 10px", fontSize: 13, color: l.cultivo ? "#111" : "#9ca3af" }}>{l.cultivo || "—"}</td>
-                    <td style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600 }}>{l.hectareas} ha</td>
-                    <td style={{ padding: "6px 10px" }}>
-                      <div style={{ display: "flex", gap: 4 }}>
-                        <Btn variant="ghost" small onClick={() => setEditLote({ ...l })}><I.edit /></Btn>
-                        <Btn variant="ghost" small onClick={() => delLote(l.id)}><I.trash /></Btn>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {lotes.map((l, idx) => {
+                  const color = l.color || COLORES_LOTE[idx % COLORES_LOTE.length].value;
+                  return (
+                    <tr key={l.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
+                      {/* 🆕 swatch de color */}
+                      <td style={{ padding: "6px 10px" }}>
+                        <div style={{ width: 14, height: 14, borderRadius: "50%", background: color, border: "2px solid #fff", boxShadow: "0 0 0 1px #e5e7eb" }} />
+                      </td>
+                      <td style={{ padding: "6px 10px", fontWeight: 700, color }}>{l.numero}</td>
+                      <td style={{ padding: "6px 10px", fontSize: 13 }}>{l.nombre}</td>
+                      <td style={{ padding: "6px 10px", fontSize: 13, color: l.cultivo ? "#111" : "#9ca3af" }}>{l.cultivo || "—"}</td>
+                      <td style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600 }}>{l.hectareas} ha</td>
+                      <td style={{ padding: "6px 10px" }}>
+                        <div style={{ display: "flex", gap: 4 }}>
+                          <Btn variant="ghost" small onClick={() => setEditLote({ ...l })}><I.edit /></Btn>
+                          <Btn variant="ghost" small onClick={() => delLote(l.id)}><I.trash /></Btn>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -1112,6 +1164,36 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
           <Inp label="Nombre del lote" value={editLote.nombre} onChange={e => setEditLote({ ...editLote, nombre: e.target.value })} />
           <Inp label="Cultivo / Uso" value={editLote.cultivo} onChange={e => setEditLote({ ...editLote, cultivo: e.target.value })} placeholder="Ej: Soja, Maíz, Pastoreo" />
           <Inp label="Hectáreas (calculado automáticamente)" type="number" value={editLote.hectareas} onChange={e => setEditLote({ ...editLote, hectareas: e.target.value })} />
+
+          {/* 🆕 Selector de color */}
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ fontSize: 13, color: "#374151", marginBottom: 6, fontWeight: 600 }}>Color del lote</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {COLORES_LOTE.map(c => {
+                const selectedColor = (editLote.color || COLORES_LOTE[0].value) === c.value;
+                return (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => setEditLote({ ...editLote, color: c.value })}
+                    title={c.label}
+                    style={{
+                      width: 34,
+                      height: 34,
+                      borderRadius: "50%",
+                      background: c.value,
+                      border: selectedColor ? "3px solid #111" : "2px solid #e5e7eb",
+                      cursor: "pointer",
+                      padding: 0,
+                      transition: "transform .1s",
+                      transform: selectedColor ? "scale(1.1)" : "scale(1)",
+                    }}
+                  />
+                );
+              })}
+            </div>
+          </div>
+
           <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
             <Btn variant="secondary" onClick={() => setEditLote(null)} full>Cancelar</Btn>
             <Btn variant="primary" onClick={saveLote} full><I.save /> Guardar</Btn>
