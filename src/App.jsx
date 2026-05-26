@@ -769,16 +769,15 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
 
 // Paleta de colores predefinida (definila FUERA de la función, junto al
 // resto de constantes, o al inicio del archivo).
+// 🆕 Razones sociales: 3 opciones cada una con su color asociado
 const COLORES_LOTE = [
-  { value: "#16a34a", label: "Verde" },
-  { value: "#3b82f6", label: "Azul" },
-  { value: "#f97316", label: "Naranja" },
-  { value: "#ef4444", label: "Rojo" },
-  { value: "#a855f7", label: "Púrpura" },
-  { value: "#eab308", label: "Amarillo" },
-  { value: "#06b6d4", label: "Cyan" },
-  { value: "#ec4899", label: "Rosa" },
+  { value: "#ec4899", label: "M.R.", colorLabel: "Rosa" },
+  { value: "#16a34a", label: "D.R.", colorLabel: "Verde" },
+  { value: "#ef4444", label: "J.S.", colorLabel: "Rojo" },
 ];
+
+// 🆕 Opciones del campo "Uso"
+const USOS_LOTE = ["Ganadero", "Agricultor", "Mixto"];
 
 function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
   const [selected, setSelected] = useState(null);
@@ -932,8 +931,8 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
         const centroid = turf.centroid(newPoly).geometry.coordinates;
         const num = currentLotes.length + 1;
 
-        // 🆕 Color cíclico de la paleta según el índice
-        const color = COLORES_LOTE[currentLotes.length % COLORES_LOTE.length].value;
+        // 🆕 Color por defecto: primera razón social (M.R. - rosa). Se puede cambiar al editar.
+        const color = COLORES_LOTE[0].value;
 
         onUpdateRef.current([...currentLotes, {
           id: Date.now(),
@@ -997,8 +996,10 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
     lotes.forEach((lote, idx) => {
       if (!lote.coords || lote.coords.length < 3) return;
 
-      // 🆕 Cada lote usa su propio color (fallback al color cíclico si no lo tiene)
-      const color = lote.color || COLORES_LOTE[idx % COLORES_LOTE.length].value;
+      // 🆕 Cada lote usa su razón social (color). Si el color guardado ya no está en
+      // la paleta nueva (lotes viejos con la paleta de 8), cae a M.R. (rosa).
+      const validColor = COLORES_LOTE.find(c => c.value === lote.color);
+      const color = validColor ? validColor.value : COLORES_LOTE[0].value;
 
       const polygon = L.polygon(lote.coords, {
         color,
@@ -1009,16 +1010,20 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
       });
       polygon.on("click", () => setSelected(lote));
       polygon.bindTooltip(
-        `<b>Lote ${lote.numero}</b> — ${lote.nombre}<br>${lote.hectareas} ha${lote.cultivo ? ` · ${lote.cultivo}` : ""}`
+        `<b>${lote.nombre || `Lote ${lote.numero}`}</b><br>${lote.hectareas} ha${lote.cultivo ? ` · ${lote.cultivo}` : ""}`
       );
       drawnItems.addLayer(polygon);
 
       if (lote.centro) {
+        // 🆕 Etiqueta tipo "pastilla" mostrando el NOMBRE del lote (no el número)
+        const displayName = lote.nombre || `Lote ${lote.numero}`;
+        // Calcular ancho aproximado para que el ícono pueda anclarse al centro
+        const approxWidth = Math.max(40, displayName.length * 7 + 18);
         const labelIcon = L.divIcon({
           className: "lote-label",
-          html: `<div style="background:${color};color:#fff;border-radius:50%;width:30px;height:30px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3)">${lote.numero}</div>`,
-          iconSize: [30, 30],
-          iconAnchor: [15, 15],
+          html: `<div style="background:${color};color:#fff;border-radius:14px;padding:4px 10px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);white-space:nowrap;line-height:1.1">${displayName}</div>`,
+          iconSize: [approxWidth, 24],
+          iconAnchor: [approxWidth / 2, 12],
         });
         L.marker(lote.centro, { icon: labelIcon })
           .addTo(labelsLayer)
@@ -1116,14 +1121,16 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                  {["", "#", "Nombre", "Cultivo", "Hectáreas", ""].map((h, i) => (
+                  {["", "#", "Nombre", "Uso", "Hectáreas", ""].map((h, i) => (
                     <th key={i} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, color: "#6b7280" }}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {lotes.map((l, idx) => {
-                  const color = l.color || COLORES_LOTE[idx % COLORES_LOTE.length].value;
+                  const validColor = COLORES_LOTE.find(c => c.value === l.color);
+                  const color = validColor ? validColor.value : COLORES_LOTE[0].value;
+                  const razonSocial = validColor ? validColor.label : COLORES_LOTE[0].label;
                   return (
                     <tr key={l.id} style={{ borderBottom: "1px solid #f3f4f6" }}>
                       {/* 🆕 swatch de color */}
@@ -1150,9 +1157,9 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
       )}
 
       {selected && (
-        <Modal title={`Lote ${selected.numero} — ${selected.nombre}`} onClose={() => setSelected(null)}>
+        <Modal title={selected.nombre || `Lote ${selected.numero}`} onClose={() => setSelected(null)}>
           <div style={{ marginBottom: 16 }}>
-            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Cultivo / Uso</div>
+            <div style={{ fontSize: 13, color: "#6b7280", marginBottom: 4 }}>Uso</div>
             <div style={{ fontWeight: 700 }}>{selected.cultivo || "Sin asignar"}</div>
           </div>
           <div style={{ marginBottom: 16 }}>
@@ -1186,13 +1193,19 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
       {editLote && (
         <Modal title="Editar Lote" onClose={() => setEditLote(null)}>
           <Inp label="Nombre del lote" value={editLote.nombre} onChange={e => setEditLote({ ...editLote, nombre: e.target.value })} />
-          <Inp label="Cultivo / Uso" value={editLote.cultivo} onChange={e => setEditLote({ ...editLote, cultivo: e.target.value })} placeholder="Ej: Soja, Maíz, Pastoreo" />
+
+          {/* 🆕 Uso como desplegable con 3 opciones */}
+          <Sel label="Uso" value={editLote.cultivo || ""} onChange={e => setEditLote({ ...editLote, cultivo: e.target.value })}>
+            <option value="">Seleccionar uso...</option>
+            {USOS_LOTE.map(u => <option key={u} value={u}>{u}</option>)}
+          </Sel>
+
           <Inp label="Hectáreas (calculado automáticamente)" type="number" value={editLote.hectareas} onChange={e => setEditLote({ ...editLote, hectareas: e.target.value })} />
 
-          {/* 🆕 Selector de color */}
+          {/* 🆕 Selector de Razón Social (3 opciones: M.R. / D.R. / J.S.) */}
           <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 13, color: "#374151", marginBottom: 6, fontWeight: 600 }}>Color del lote</div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <div style={{ fontSize: 13, color: "#374151", marginBottom: 6, fontWeight: 600 }}>Razón social</div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
               {COLORES_LOTE.map(c => {
                 const selectedColor = (editLote.color || COLORES_LOTE[0].value) === c.value;
                 return (
@@ -1200,19 +1213,32 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
                     key={c.value}
                     type="button"
                     onClick={() => setEditLote({ ...editLote, color: c.value })}
-                    title={c.label}
+                    title={`${c.label} (${c.colorLabel})`}
                     style={{
-                      width: 34,
-                      height: 34,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      padding: "8px 14px",
+                      borderRadius: 10,
+                      background: selectedColor ? c.value + "18" : "#fff",
+                      border: selectedColor ? `2px solid ${c.value}` : "1.5px solid #e5e7eb",
+                      cursor: "pointer",
+                      fontSize: 13,
+                      fontWeight: 700,
+                      color: selectedColor ? c.value : "#374151",
+                      transition: "all .1s",
+                    }}
+                  >
+                    <div style={{
+                      width: 18,
+                      height: 18,
                       borderRadius: "50%",
                       background: c.value,
-                      border: selectedColor ? "3px solid #111" : "2px solid #e5e7eb",
-                      cursor: "pointer",
-                      padding: 0,
-                      transition: "transform .1s",
-                      transform: selectedColor ? "scale(1.1)" : "scale(1)",
-                    }}
-                  />
+                      border: "2px solid #fff",
+                      boxShadow: "0 0 0 1px #e5e7eb",
+                    }} />
+                    {c.label}
+                  </button>
                 );
               })}
             </div>
