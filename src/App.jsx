@@ -777,7 +777,7 @@ const COLORES_LOTE = [
 ];
 
 // 🆕 Opciones del campo "Uso"
-const USOS_LOTE = ["Ganadero", "Agricultor", "Mixto"];
+const USOS_LOTE = ["Ganadero", "Agrícola", "Mixto"];
 
 function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
   const [selected, setSelected] = useState(null);
