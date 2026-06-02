@@ -79,6 +79,9 @@ const I = {
 // CONSTANTS
 // ════════════════════════════════════════════════════════════════════════════
 const CATEGORIAS_STOCK = ["Fertilizante", "Semillas", "Agroquímico", "Veterinario"];
+// 🆕 Sociedades (razones sociales) — mismas 3 que en los lotes
+const SOCIEDADES = ["M.R.", "D.R.", "J.S."];
+const SOC_COLOR = { "M.R.": "#ec4899", "D.R.": "#16a34a", "J.S.": "#ef4444" };
 const UNIDADES = ["kg", "ton", "lt", "bolsa", "dosis", "unidad"];
 const INSUMOS_PREDEFINIDOS = {
   Fertilizante: ["Urea", "Fosfato Diamónico", "Superfosfato Triple", "Otro"],
@@ -151,6 +154,26 @@ function getInsumosOpciones(categoria, stockData){
   const existentes = [...new Set(stockData.filter(s=>s.categoria===categoria).map(s=>s.nombre))];
   const merged = [...new Set([...predef, ...existentes])];
   return [...merged, "Otro"];
+}
+
+// 🆕 Helpers para el stock repartido por sociedad
+// Normaliza el objeto cantidades_soc asegurando las 3 claves
+function getCantSoc(item){
+  const cs = item?.cantidades_soc || {};
+  return {
+    "M.R.": Number(cs["M.R."]||0),
+    "D.R.": Number(cs["D.R."]||0),
+    "J.S.": Number(cs["J.S."]||0),
+  };
+}
+// Suma asignada a sociedades (puede ser menor al total si hay "sin asignar")
+function sumaSoc(item){
+  const cs = getCantSoc(item);
+  return cs["M.R."]+cs["D.R."]+cs["J.S."];
+}
+// Cuánto del total NO está asignado a ninguna sociedad (insumos viejos)
+function sinAsignar(item){
+  return Math.max(0, Number(item?.cantidad||0) - sumaSoc(item));
 }
 
 // Permission helpers based on role
@@ -1835,13 +1858,14 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
 
 // ── STOCK ───────────────────────────────────────────────────────────────────
 function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
-  const EMPTY={nombre:"",nombreCustom:"",unidad:"kg",categoria:"Fertilizante",cantidad:"",minimo:"",costo_unit:"",ubicacion:""};
+  const EMPTY={nombre:"",nombreCustom:"",unidad:"kg",categoria:"Fertilizante",cantidad:"",minimo:"",costo_unit:"",ubicacion:"",sociedad:""};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [comprarItem,setComprarItem]=useState(null);
   const [transferItem,setTransferItem]=useState(null);
   const [search,setSearch]=useState("");
   const [catFilter,setCatFilter]=useState("Todas");
   const [campoFil,setCampoFil]=useState("Todos");
+  const [socFil,setSocFil]=useState("Todas"); // 🆕 filtro por sociedad
 
   const cats=["Todas",...CATEGORIAS_STOCK];
 
@@ -1849,20 +1873,45 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
     const matchCat = catFilter==="Todas"||s.categoria===catFilter;
     const matchSearch = s.nombre?.toLowerCase().includes(search.toLowerCase());
     const matchCampo = campoFil==="Todos"||s.ubicacion===campoFil;
-    return matchCat&&matchSearch&&matchCampo;
+    // 🆕 al filtrar por sociedad, mostrar solo insumos que tengan algo de esa sociedad
+    const matchSoc = socFil==="Todas"||getCantSoc(s)[socFil]>0;
+    return matchCat&&matchSearch&&matchCampo&&matchSoc;
   });
 
   const save = async ()=>{
     const nombreFinal = editItem.nombre==="Otro"?editItem.nombreCustom:editItem.nombre;
     if(!nombreFinal){toast("Faltan campos","error");return;}
+    const cant = Number(editItem.cantidad||0);
+
+    // 🆕 Armar el reparto por sociedad
+    let cantidades_soc;
+    if(editItem.id_real){
+      // Al editar: respetar el reparto existente, pero si cambió la sociedad/cantidad
+      // y había una sola sociedad asignada, reasignar todo a la elegida.
+      const prev = getCantSoc(editItem);
+      const tieneReparto = (prev["M.R."]+prev["D.R."]+prev["J.S."])>0;
+      if(editItem.sociedad){
+        // si el usuario eligió una sociedad explícita, todo el total va a esa
+        cantidades_soc = {"M.R.":0,"D.R.":0,"J.S.":0, [editItem.sociedad]:cant};
+      } else {
+        cantidades_soc = tieneReparto ? prev : {};
+      }
+    } else {
+      // Al crear: la cantidad inicial va a la sociedad elegida (si eligió una)
+      cantidades_soc = editItem.sociedad
+        ? {"M.R.":0,"D.R.":0,"J.S.":0, [editItem.sociedad]:cant}
+        : {};
+    }
+
     const row={
       nombre:nombreFinal,
       unidad:editItem.unidad,
       categoria:editItem.categoria,
-      cantidad:Number(editItem.cantidad||0),
+      cantidad:cant,
       minimo:Number(editItem.minimo||0),
       costo_unit:Number(editItem.costo_unit||0),
       ubicacion:editItem.ubicacion,
+      cantidades_soc,
     };
     if(editItem.id_real){
       const {error}=await sb.from("stock").update(row).eq("id",editItem.id_real);
@@ -1873,7 +1922,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
       const {data:inserted,error}=await sb.from("stock").insert({...row,org_id:orgId}).select().single();
       if(error){toast(error.message,"error");return;}
       if(total>0){
-        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})`,categoria:"Compra insumos",campo:row.ubicacion,monto:total,origen:"stock",origen_id:inserted.id});
+        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,monto:total,origen:"stock",origen_id:inserted.id});
       }
       toast("Insumo agregado");
     }
@@ -1882,14 +1931,18 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
 
   const comprar = async ()=>{
     if(!comprarItem.cantidad||!comprarItem.costo_unit){toast("Faltan datos","error");return;}
+    if(!comprarItem.sociedad){toast("Elegí la sociedad","error");return;}
     const cantNueva = Number(comprarItem.cantidad);
     const costo = Number(comprarItem.costo_unit);
     const cantActual = Number(comprarItem.item.cantidad);
     const total = cantNueva*costo;
     const newAvg = ((cantActual*Number(comprarItem.item.costo_unit))+(cantNueva*costo))/(cantActual+cantNueva);
-    await sb.from("stock").update({cantidad:cantActual+cantNueva,costo_unit:newAvg}).eq("id",comprarItem.item.id);
-    await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad})`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,origen:"stock_compra",origen_id:comprarItem.item.id});
-    toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre}`);
+    // 🆕 sumar la compra a la sociedad elegida
+    const cs = getCantSoc(comprarItem.item);
+    cs[comprarItem.sociedad] = Number(cs[comprarItem.sociedad]||0) + cantNueva;
+    await sb.from("stock").update({cantidad:cantActual+cantNueva,costo_unit:newAvg,cantidades_soc:cs}).eq("id",comprarItem.item.id);
+    await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,origen:"stock_compra",origen_id:comprarItem.item.id});
+    toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre} (${comprarItem.sociedad})`);
     setComprarItem(null); reload();
   };
 
@@ -2025,6 +2078,10 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
             <option>Todos</option>
             {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
           </select>
+          <select value={socFil} onChange={e=>setSocFil(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#fff"}}>
+            <option value="Todas">Todas las sociedades</option>
+            {SOCIEDADES.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
         </div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -2043,7 +2100,17 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                   <tr key={s.id} style={{borderBottom:"1px solid #f9fafb",background:bajo?"#fff5f5":"transparent"}}>
                     <td style={{padding:"12px",fontWeight:600}}>{s.nombre}<div style={{fontSize:11,color:"#9ca3af"}}>{s.unidad}</div></td>
                     <td style={{padding:"12px"}}><Badge label={s.categoria} c={bc.c} bg={bc.bg}/></td>
-                    <td style={{padding:"12px",fontSize:13}}>{Number(s.cantidad).toLocaleString("es-AR")}<div style={{fontSize:11,color:bajo?"#ef4444":"#9ca3af"}}>Min: {s.minimo}</div></td>
+                    <td style={{padding:"12px",fontSize:13}}>{Number(s.cantidad).toLocaleString("es-AR")}<div style={{fontSize:11,color:bajo?"#ef4444":"#9ca3af"}}>Min: {s.minimo}</div>
+                      {/* 🆕 desglose por sociedad */}
+                      {(()=>{ const cs=getCantSoc(s); const sa=sinAsignar(s); const partes=SOCIEDADES.filter(soc=>cs[soc]>0); if(partes.length===0&&sa===0) return null; return (
+                        <div style={{display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>
+                          {partes.map(soc=>(
+                            <span key={soc} style={{fontSize:10,fontWeight:700,padding:"1px 6px",borderRadius:8,background:SOC_COLOR[soc]+"22",color:SOC_COLOR[soc]}}>{soc}: {Number(cs[soc]).toLocaleString("es-AR")}</span>
+                          ))}
+                          {sa>0&&<span style={{fontSize:10,fontWeight:600,padding:"1px 6px",borderRadius:8,background:"#f3f4f6",color:"#9ca3af"}}>s/asignar: {sa.toLocaleString("es-AR")}</span>}
+                        </div>
+                      ); })()}
+                    </td>
                     <td style={{padding:"12px",fontSize:13}}>{fmt(s.costo_unit)}</td>
                     <td style={{padding:"12px",fontWeight:600,fontSize:13}}>{fmtK(Number(s.cantidad)*Number(s.costo_unit))}</td>
                     <td style={{padding:"12px",minWidth:100}}>
@@ -2054,7 +2121,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
                     <td style={{padding:"12px"}}>
                       <div style={{display:"flex",gap:4}}>
-                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit})}>+ Comprar</Btn></EditOnly>
+                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit,sociedad:""})}>+ Comprar</Btn></EditOnly>
                         <EditOnly>
                           <Btn variant="ghost" small onClick={()=>setTransferItem({
                             item:s,
@@ -2062,7 +2129,12 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                             cantidad_a_mover:s.cantidad,
                           })} title="Transferir a otro campo">🔄</Btn>
                         </EditOnly>
-                        <EditBtn onClick={()=>setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:""})}/>
+                        <EditBtn onClick={()=>{
+                          const cs=getCantSoc(s);
+                          const socs=SOCIEDADES.filter(soc=>cs[soc]>0);
+                          const unaSola = socs.length===1 ? socs[0] : "";
+                          setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:"",sociedad:unaSola});
+                        }}/>
                         <DelBtn onClick={()=>setConfirm(s.id)}/>
                       </div>
                     </td>
@@ -2110,6 +2182,16 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
             <Inp label="Stock mínimo" type="number" value={editItem.minimo} onChange={e=>setEditItem({...editItem,minimo:e.target.value})}/>
           </div>
           <Inp label="Costo unitario ($)" type="number" value={editItem.costo_unit} onChange={e=>setEditItem({...editItem,costo_unit:e.target.value})}/>
+          {/* 🆕 Sociedad dueña de esta cantidad */}
+          <Sel label="Sociedad (razón social)" value={editItem.sociedad||""} onChange={e=>setEditItem({...editItem,sociedad:e.target.value})}>
+            <option value="">— Sin asignar —</option>
+            {SOCIEDADES.map(s=><option key={s} value={s}>{s}</option>)}
+          </Sel>
+          {editItem.id_real && editItem.sociedad && (
+            <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
+              ℹ️ Al guardar, toda la cantidad ({Number(editItem.cantidad||0).toLocaleString("es-AR")} {editItem.unidad}) quedará asignada a <b>{editItem.sociedad}</b>.
+            </div>
+          )}
           <div style={{display:"flex",gap:10,marginTop:8}}>
             <Btn variant="secondary" onClick={()=>setEditItem(null)} full>Cancelar</Btn>
             <Btn variant="primary" onClick={save} full><I.save/> Guardar</Btn>
@@ -2124,6 +2206,11 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
           </div>
           <Inp label={`Cantidad a agregar (${comprarItem.item.unidad})`} type="number" value={comprarItem.cantidad} onChange={e=>setComprarItem({...comprarItem,cantidad:e.target.value})}/>
           <Inp label="Costo unitario actual ($)" type="number" value={comprarItem.costo_unit} onChange={e=>setComprarItem({...comprarItem,costo_unit:e.target.value})}/>
+          {/* 🆕 A qué sociedad entra esta compra */}
+          <Sel label="Sociedad que compra" value={comprarItem.sociedad||""} onChange={e=>setComprarItem({...comprarItem,sociedad:e.target.value})}>
+            <option value="">Seleccionar...</option>
+            {SOCIEDADES.map(s=><option key={s} value={s}>{s}</option>)}
+          </Sel>
           <div style={{background:"#fef9c3",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
             Total compra: <b>{fmt((Number(comprarItem.cantidad)||0)*(Number(comprarItem.costo_unit)||0))}</b>
           </div>
