@@ -22,6 +22,9 @@ const SUPABASE_KEY = "sb_publishable_etH9UCqAo0u9NF9dQoKWag_fBikSSuO";
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// 🆕 Logo de la marca (María Amelia) incrustado para no depender de archivos externos
+const LOGO_URL = "data:image/png;base64,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";
+
 // ════════════════════════════════════════════════════════════════════════════
 // ICONS
 // ════════════════════════════════════════════════════════════════════════════
@@ -67,6 +70,9 @@ const I = {
   check:()=><Ic d="M20 6L9 17l-5-5"/>,
   history:()=><Ic d="M3 3v5h5M3.05 13A9 9 0 1015 3.5M12 7v5l3 2"/>,
   download:()=><Ic d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M7 10l5 5 5-5M12 15V3"/>,
+  folder:()=><Ic d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/>,
+  image:()=><Ic d="M19 3H5a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2V5a2 2 0 00-2-2zM8.5 10a1.5 1.5 0 100-3 1.5 1.5 0 000 3zM21 15l-5-5L5 21"/>,
+  info:()=><Ic d="M12 22a10 10 0 100-20 10 10 0 000 20zM12 16v-4M12 8h.01"/>,
 };
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -338,7 +344,7 @@ function AuthScreen({onAuth}){
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%)",padding:20,fontFamily:"'DM Sans',system-ui,sans-serif"}}>
       <div style={{background:"#fff",borderRadius:18,padding:36,width:"100%",maxWidth:420,boxShadow:"0 20px 60px rgba(0,0,0,0.1)"}}>
         <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{width:56,height:56,borderRadius:14,background:"#16a34a",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:28,marginBottom:12}}>🌾</div>
+          <div style={{width:72,height:72,borderRadius:16,background:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:12,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={LOGO_URL} alt="María Amelia" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
           <h1 style={{margin:0,fontSize:24,fontWeight:800}}>Campo Manager</h1>
           <p style={{color:"#6b7280",marginTop:6,fontSize:14}}>{mode==="login"?"Iniciá sesión":"Creá tu cuenta"}</p>
         </div>
@@ -623,7 +629,7 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
             <input ref={mapaFileRef} type="file" accept="image/*" style={{display:"none"}} onChange={e=>uploadMapa(e,detail)}/>
           </div>
           {detail.mapa_url
-            ? <LotesMapa campo={detail} ordenes={ordenesCampo} campanas={campanasCampo} onUpdate={lotes=>updateLotesData(detail,lotes)}/>
+            ? <LotesMapa campo={detail} ordenes={ordenesCampo} campanas={campanasCampo} onUpdate={lotes=>updateLotesData(detail,lotes)} orgId={orgId} data={data} reload={reload} toast={toast}/>
             : <div style={{textAlign:"center",padding:"40px 20px",background:"#f9fafb",borderRadius:10,color:"#9ca3af"}}>
                 <I.map/><div style={{marginTop:8,fontSize:14}}>Subí una imagen del mapa de lotes</div>
                 <div style={{fontSize:12,marginTop:4}}>Después podrás marcar cada lote</div>
@@ -779,9 +785,10 @@ const COLORES_LOTE = [
 // 🆕 Opciones del campo "Uso"
 const USOS_LOTE = ["Ganadero", "Agrícola", "Mixto"];
 
-function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
+function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, toast }) {
   const [selected, setSelected] = useState(null);
   const [editLote, setEditLote] = useState(null);
+  const [fichaLote, setFichaLote] = useState(null); // 🆕 lote cuya carpeta/ficha está abierta
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searching, setSearching] = useState(false);
@@ -1143,6 +1150,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
                       <td style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600 }}>{l.hectareas} ha</td>
                       <td style={{ padding: "6px 10px" }}>
                         <div style={{ display: "flex", gap: 4 }}>
+                          <Btn variant="ghost" small onClick={() => setFichaLote(l)} title="Abrir carpeta del lote"><I.folder /></Btn>
                           <Btn variant="ghost" small onClick={() => setEditLote({ ...l })}><I.edit /></Btn>
                           <Btn variant="ghost" small onClick={() => delLote(l.id)}><I.trash /></Btn>
                         </div>
@@ -1250,10 +1258,291 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate }) {
           </div>
         </Modal>
       )}
+
+      {/* 🆕 Carpeta / ficha del lote */}
+      {fichaLote && (
+        <FichaLote
+          lote={fichaLote}
+          campo={campo}
+          ordenes={ordenes}
+          orgId={orgId}
+          data={data}
+          reload={reload}
+          toast={toast}
+          onClose={() => setFichaLote(null)}
+          onUpdateLote={(updated) => {
+            // guardar cambios de notas del lote dentro de lotes_data
+            const nuevos = (campo.lotes_data || []).map(l => l.id === updated.id ? updated : l);
+            onUpdate(nuevos);
+            setFichaLote(updated);
+          }}
+        />
+      )}
     </div>
   );
 }
-// ── ANIMALES ────────────────────────────────────────────────────────────────
+
+// ════════════════════════════════════════════════════════════════════════════
+// 🆕 FICHA / CARPETA DEL LOTE — Info, Órdenes e Imágenes (NDVI/satelitales)
+// ════════════════════════════════════════════════════════════════════════════
+function FichaLote({ lote, campo, ordenes, orgId, data, reload, toast, onClose, onUpdateLote }) {
+  const [tab, setTab] = useState("info");
+  const [notas, setNotas] = useState(lote.notas || "");
+  const [savingNotas, setSavingNotas] = useState(false);
+
+  // Imágenes del lote
+  const [imagenes, setImagenes] = useState([]);
+  const [loadingImgs, setLoadingImgs] = useState(true);
+  const [uploadingImg, setUploadingImg] = useState(false);
+  const [tipoImg, setTipoImg] = useState("satelital");
+  const [tituloImg, setTituloImg] = useState("");
+  const [viewerImg, setViewerImg] = useState(null);
+  const imgFileRef = useRef();
+
+  const colorInfo = COLORES_LOTE.find(c => c.value === lote.color) || COLORES_LOTE[0];
+
+  // Órdenes asociadas a este lote: por lotes_ids (preferido) o por nombre en el título (fallback)
+  const ordenesLote = (ordenes || []).filter(o => {
+    const porId = Array.isArray(o.lotes_ids) && o.lotes_ids.includes(lote.id);
+    const porNombre = lote.nombre && o.titulo?.toLowerCase().includes(lote.nombre.toLowerCase());
+    return porId || porNombre;
+  });
+
+  // Cargar imágenes del lote desde la tabla lote_imagenes
+  const cargarImagenes = useCallback(async () => {
+    setLoadingImgs(true);
+    const { data: rows, error } = await sb
+      .from("lote_imagenes")
+      .select("*")
+      .eq("campo_id", campo.id)
+      .eq("lote_id", String(lote.id))
+      .order("fecha", { ascending: false });
+    if (!error && rows) setImagenes(rows);
+    setLoadingImgs(false);
+  }, [campo.id, lote.id]);
+
+  useEffect(() => { cargarImagenes(); }, [cargarImagenes]);
+
+  // Guardar notas (van dentro de lotes_data del campo)
+  const guardarNotas = async () => {
+    setSavingNotas(true);
+    onUpdateLote({ ...lote, notas });
+    setSavingNotas(false);
+    if (toast) toast("Notas guardadas");
+  };
+
+  // Subir una imagen al bucket "lotes" y registrarla en la tabla
+  const subirImagen = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      if (toast) toast("La imagen supera los 10 MB", "error");
+      return;
+    }
+    setUploadingImg(true);
+    try {
+      const ext = file.name.split(".").pop();
+      const path = `${orgId}/${campo.id}/${lote.id}/${Date.now()}.${ext}`;
+      const { error: upErr } = await sb.storage.from("lotes").upload(path, file);
+      if (upErr) { if (toast) toast(upErr.message, "error"); setUploadingImg(false); return; }
+      const { data: { publicUrl } } = sb.storage.from("lotes").getPublicUrl(path);
+      const { error: insErr } = await sb.from("lote_imagenes").insert({
+        org_id: orgId,
+        campo_id: campo.id,
+        lote_id: String(lote.id),
+        tipo: tipoImg,
+        titulo: tituloImg || null,
+        url: publicUrl,
+        storage_path: path,
+      });
+      if (insErr) { if (toast) toast(insErr.message, "error"); setUploadingImg(false); return; }
+      setTituloImg("");
+      if (toast) toast("Imagen subida");
+      await cargarImagenes();
+    } catch (err) {
+      if (toast) toast("Error al subir: " + err.message, "error");
+    }
+    setUploadingImg(false);
+    if (imgFileRef.current) imgFileRef.current.value = "";
+  };
+
+  // Borrar imagen (de storage y de la tabla)
+  const borrarImagen = async (img) => {
+    try {
+      await sb.storage.from("lotes").remove([img.storage_path]);
+      await sb.from("lote_imagenes").delete().eq("id", img.id);
+      if (toast) toast("Imagen eliminada");
+      await cargarImagenes();
+    } catch (err) {
+      if (toast) toast("Error al borrar: " + err.message, "error");
+    }
+  };
+
+  const TIPOS_IMG = [
+    { value: "satelital", label: "🛰️ Satelital" },
+    { value: "ndvi", label: "🌿 NDVI" },
+    { value: "foto", label: "📷 Foto" },
+    { value: "otro", label: "📄 Otro" },
+  ];
+
+  const tabStyle = (active) => ({
+    padding: "8px 16px",
+    border: "none",
+    background: "transparent",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: active ? 700 : 500,
+    color: active ? "#16a34a" : "#6b7280",
+    borderBottom: active ? "2px solid #16a34a" : "2px solid transparent",
+  });
+
+  return (
+    <Modal title={`📁 ${lote.nombre || `Lote ${lote.numero}`}`} onClose={onClose} wide>
+      {/* Encabezado con datos rápidos */}
+      <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 16, padding: "12px 14px", background: "#f9fafb", borderRadius: 10 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ width: 16, height: 16, borderRadius: "50%", background: colorInfo.value, border: "2px solid #fff", boxShadow: "0 0 0 1px #e5e7eb" }} />
+          <div>
+            <div style={{ fontSize: 10, color: "#9ca3af" }}>Razón social</div>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{colorInfo.label}</div>
+          </div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: "#9ca3af" }}>Uso</div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>{lote.cultivo || "—"}</div>
+        </div>
+        <div>
+          <div style={{ fontSize: 10, color: "#9ca3af" }}>Hectáreas</div>
+          <div style={{ fontSize: 13, fontWeight: 700 }}>{lote.hectareas} ha</div>
+        </div>
+      </div>
+
+      {/* Pestañas */}
+      <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #e5e7eb", marginBottom: 16 }}>
+        <button style={tabStyle(tab === "info")} onClick={() => setTab("info")}><I.info /> Info</button>
+        <button style={tabStyle(tab === "ordenes")} onClick={() => setTab("ordenes")}><I.clipboard /> Órdenes ({ordenesLote.length})</button>
+        <button style={tabStyle(tab === "imagenes")} onClick={() => setTab("imagenes")}><I.image /> Imágenes ({imagenes.length})</button>
+      </div>
+
+      {/* ─── TAB INFO ─── */}
+      {tab === "info" && (
+        <div>
+          <Textarea
+            label="Notas y observaciones del lote"
+            value={notas}
+            onChange={e => setNotas(e.target.value)}
+            placeholder="Ej: Lote con buena retención de humedad. Última fertilización en marzo. Problemas de drenaje en la esquina noreste..."
+          />
+          <EditOnly>
+            <Btn variant="primary" small onClick={guardarNotas} disabled={savingNotas}>
+              <I.save /> Guardar notas
+            </Btn>
+          </EditOnly>
+        </div>
+      )}
+
+      {/* ─── TAB ÓRDENES ─── */}
+      {tab === "ordenes" && (
+        <div>
+          {ordenesLote.length === 0
+            ? <div style={{ textAlign: "center", padding: "30px 20px", color: "#9ca3af", fontSize: 13 }}>
+                <I.clipboard /><div style={{ marginTop: 8 }}>No hay órdenes asociadas a este lote.</div>
+                <div style={{ fontSize: 12, marginTop: 4 }}>Las órdenes que asocies a este lote (o cuyo título incluya su nombre) van a aparecer acá.</div>
+              </div>
+            : ordenesLote.map(o => (
+                <div key={o.id} style={{ padding: "10px 12px", borderRadius: 8, border: "1px solid #f3f4f6", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600 }}>{TIPO_ICON[o.tipo] || "📋"} {o.titulo}</div>
+                    <div style={{ fontSize: 11, color: "#9ca3af" }}>{o.responsable ? `👤 ${o.responsable} · ` : ""}{fmtDate(o.fecha)}</div>
+                  </div>
+                  <Badge
+                    label={o.estado}
+                    bg={o.estado === "Completada" ? "#dcfce7" : "#fef3c7"}
+                    c={o.estado === "Completada" ? "#15803d" : "#b45309"}
+                  />
+                </div>
+              ))
+          }
+        </div>
+      )}
+
+      {/* ─── TAB IMÁGENES ─── */}
+      {tab === "imagenes" && (
+        <div>
+          <EditOnly>
+            <div style={{ background: "#f9fafb", borderRadius: 10, padding: 14, marginBottom: 14 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>Subir nueva imagen</div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "flex-end" }}>
+                <div style={{ flex: 1, minWidth: 140 }}>
+                  <Sel label="Tipo" value={tipoImg} onChange={e => setTipoImg(e.target.value)}>
+                    {TIPOS_IMG.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                  </Sel>
+                </div>
+                <div style={{ flex: 2, minWidth: 180 }}>
+                  <Inp label="Título (opcional)" value={tituloImg} onChange={e => setTituloImg(e.target.value)} placeholder="Ej: NDVI enero 2026" />
+                </div>
+              </div>
+              <input ref={imgFileRef} type="file" accept="image/*" style={{ display: "none" }} onChange={subirImagen} />
+              <Btn variant="primary" small onClick={() => imgFileRef.current.click()} disabled={uploadingImg}>
+                <I.upload /> {uploadingImg ? "Subiendo..." : "Elegir y subir imagen"}
+              </Btn>
+            </div>
+          </EditOnly>
+
+          {loadingImgs
+            ? <div style={{ textAlign: "center", padding: 20, color: "#9ca3af", fontSize: 13 }}>Cargando imágenes...</div>
+            : imagenes.length === 0
+              ? <div style={{ textAlign: "center", padding: "30px 20px", color: "#9ca3af", fontSize: 13 }}>
+                  <I.image /><div style={{ marginTop: 8 }}>Todavía no subiste imágenes de este lote.</div>
+                </div>
+              : <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: 12 }}>
+                  {imagenes.map(img => (
+                    <div key={img.id} style={{ border: "1px solid #e5e7eb", borderRadius: 10, overflow: "hidden", background: "#fff" }}>
+                      <div
+                        style={{ width: "100%", height: 110, background: `#f3f4f6 url(${img.url}) center/cover`, cursor: "pointer" }}
+                        onClick={() => setViewerImg(img)}
+                      />
+                      <div style={{ padding: "6px 8px" }}>
+                        <div style={{ fontSize: 11, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                          {TIPOS_IMG.find(t => t.value === img.tipo)?.label || img.tipo}
+                        </div>
+                        {img.titulo && <div style={{ fontSize: 10, color: "#6b7280", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{img.titulo}</div>}
+                        <div style={{ fontSize: 10, color: "#9ca3af", display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 2 }}>
+                          <span>{fmtDate(img.fecha)}</span>
+                          <AdminOnly>
+                            <button onClick={() => borrarImagen(img)} style={{ background: "none", border: "none", cursor: "pointer", color: "#dc2626", padding: 0 }} title="Eliminar"><I.trash /></button>
+                          </AdminOnly>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+          }
+
+          {/* Visor de imagen ampliada */}
+          {viewerImg && (
+            <div
+              onClick={() => setViewerImg(null)}
+              style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.85)", zIndex: 3000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}
+            >
+              <div style={{ maxWidth: "90%", maxHeight: "90%", textAlign: "center" }} onClick={e => e.stopPropagation()}>
+                <img src={viewerImg.url} alt={viewerImg.titulo || ""} style={{ maxWidth: "100%", maxHeight: "80vh", borderRadius: 8 }} />
+                <div style={{ color: "#fff", marginTop: 10, fontSize: 13 }}>
+                  {viewerImg.titulo || (TIPOS_IMG.find(t => t.value === viewerImg.tipo)?.label)} · {fmtDate(viewerImg.fecha)}
+                </div>
+                <div style={{ display: "flex", gap: 10, justifyContent: "center", marginTop: 12 }}>
+                  <a href={viewerImg.url} target="_blank" rel="noreferrer" style={{ color: "#fff", textDecoration: "underline", fontSize: 13 }}>Abrir en pestaña nueva</a>
+                  <button onClick={() => setViewerImg(null)} style={{ background: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Cerrar</button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   const EMPTY={rodeo:"",campo:"",lote:"",tipo:"vacas",raza:"Angus",razaCustom:"",cabezas:"",costo_por_cabeza:"",costo:0,fecha:todayISO()};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
@@ -1456,7 +1745,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
           {lotesDelCampo.length>0 ? (
             <Sel label="Lote / Potrero" value={editItem.lote} onChange={e=>setEditItem({...editItem,lote:e.target.value})}>
               <option value="">Sin asignar</option>
-              {lotesDelCampo.map(l=><option key={l.id} value={l.nombre}>Lote {l.numero} — {l.nombre}{l.cultivo?` (${l.cultivo})`:""}</option>)}
+              {lotesDelCampo.map(l=><option key={l.id} value={l.nombre}>{l.nombre||`Lote ${l.numero}`}{l.cultivo?` (${l.cultivo})`:""}</option>)}
             </Sel>
           ):(
             <div style={{marginBottom:13}}>
@@ -1513,7 +1802,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
           {transferItem.campo_destino && lotesDestino.length>0 && (
             <Sel label="Lote destino" value={transferItem.lote_destino} onChange={e=>setTransferItem({...transferItem,lote_destino:e.target.value})}>
               <option value="">Sin asignar</option>
-              {lotesDestino.map(l=><option key={l.id} value={l.nombre}>Lote {l.numero} — {l.nombre}{l.cultivo?` (${l.cultivo})`:""}</option>)}
+              {lotesDestino.map(l=><option key={l.id} value={l.nombre}>{l.nombre||`Lote ${l.numero}`}{l.cultivo?` (${l.cultivo})`:""}</option>)}
             </Sel>
           )}
 
@@ -2265,7 +2554,7 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
                 {lotesAsignados.map(l=>(
                   <span key={l.id} style={{display:"inline-flex",alignItems:"center",gap:6,padding:"4px 10px",borderRadius:14,background:(l.color||"#16a34a")+"22",color:l.color||"#16a34a",fontSize:12,fontWeight:600}}>
                     <span style={{width:8,height:8,borderRadius:"50%",background:l.color||"#16a34a"}}/>
-                    Lote {l.numero} — {l.nombre} ({l.hectareas} ha)
+                    {l.nombre||`Lote ${l.numero}`} ({l.hectareas} ha)
                   </span>
                 ))}
               </div>
@@ -2402,7 +2691,7 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
                         return(
                           <button key={l.id} type="button" onClick={()=>toggleLote(l.id)} style={{padding:"6px 12px",borderRadius:20,border:"1.5px solid",borderColor:sel?color:"#e5e7eb",background:sel?color+"22":"#fff",color:sel?color:"#6b7280",cursor:"pointer",fontSize:12,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
                             <span style={{width:10,height:10,borderRadius:"50%",background:color,display:"inline-block"}}/>
-                            {sel?"✓ ":""}Lote {l.numero} — {l.nombre} ({l.hectareas} ha)
+                            {sel?"✓ ":""}{l.nombre||`Lote ${l.numero}`} ({l.hectareas} ha)
                           </button>
                         );
                       })}
@@ -2546,7 +2835,7 @@ function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
           const campoObj = data.campos.find(c=>c.nombre===o.campo);
           const lotesNombres = (o.lotes_ids||[]).map(lid=>{
             const l = (campoObj?.lotes_data||[]).find(x=>x.id===lid);
-            return l?`Lote ${l.numero}`:null;
+            return l?(l.nombre||`Lote ${l.numero}`):null;
           }).filter(Boolean);
           const campObj = data.campanas.find(c=>c.id===o.campana_id);
           return(
@@ -2613,7 +2902,7 @@ function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
                       const sel = (editItem.lotes_ids||[]).includes(l.id);
                       return(
                         <button key={l.id} type="button" onClick={()=>toggleLote(l.id)} style={{padding:"6px 12px",borderRadius:20,border:"1.5px solid",borderColor:sel?"#16a34a":"#e5e7eb",background:sel?"#f0fdf4":"#fff",color:sel?"#16a34a":"#6b7280",cursor:"pointer",fontSize:12,fontWeight:600}}>
-                          {sel?"✓ ":""}Lote {l.numero} — {l.nombre}
+                          {sel?"✓ ":""}{l.nombre||`Lote ${l.numero}`}
                         </button>
                       );
                     })}
@@ -3601,7 +3890,7 @@ export default function App(){
 
       <div style={{width:sidebarOpen?232:58,minWidth:sidebarOpen?232:58,background:"#fff",borderRight:"1px solid #e5e7eb",display:"flex",flexDirection:"column",transition:"width .25s",overflow:"hidden",boxShadow:"2px 0 8px rgba(0,0,0,0.04)",zIndex:10}}>
         <div style={{padding:"14px 12px",borderBottom:"1px solid #f3f4f6",display:"flex",alignItems:"center",gap:10}}>
-          <div style={{width:36,height:36,borderRadius:10,background:"#16a34a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:900,fontSize:18,flexShrink:0}}>🌾</div>
+          <div style={{width:36,height:36,borderRadius:10,background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={LOGO_URL} alt="María Amelia" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
           {sidebarOpen&&<div><div style={{fontSize:10,color:"#9ca3af",lineHeight:1}}>Control operativo</div><div style={{fontWeight:800,fontSize:14}}>Campo Manager</div></div>}
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"6px 0"}}>
