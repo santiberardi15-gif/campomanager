@@ -1979,7 +1979,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
     const stockUpdate = {cantidad:cantActual+cantNueva,costo_unit:newAvg,cantidades_soc:cs};
     if(fechaLlegada) stockUpdate.fecha_llegada = fechaLlegada;
     await sb.from("stock").update(stockUpdate).eq("id",comprarItem.item.id);
-    const conceptoCompra = `Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`+(fechaLlegada?:"");
+    const conceptoCompra = `Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`+(fechaLlegada?` · llega ${fmtDate(fechaLlegada)}`:"");
     await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
     toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre} (${comprarItem.sociedad})`);
     setComprarItem(null); reload();
