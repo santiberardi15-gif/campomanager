@@ -1567,16 +1567,18 @@ function FichaLote({ lote, campo, ordenes, orgId, data, reload, toast, onClose, 
 }
 
 function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
-  const EMPTY={rodeo:"",campo:"",lote:"",tipo:"vacas",raza:"Angus",razaCustom:"",cabezas:"",costo_por_cabeza:"",costo:0,fecha:todayISO()};
+  const EMPTY={rodeo:"",campo:"",lote:"",tipo:"vacas",raza:"Angus",razaCustom:"",cabezas:"",costo_por_cabeza:"",costo:0,fecha:todayISO(),sociedad:""};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [search,setSearch]=useState("");
   const [campoFil,setCampoFil]=useState("Todos");
   const [transferItem,setTransferItem]=useState(null);
+  const [socFilAni,setSocFilAni]=useState("");
 
   const filtered=data.animales.filter(a=>{
     const matchSearch = a.rodeo?.toLowerCase().includes(search.toLowerCase())||a.campo?.toLowerCase().includes(search.toLowerCase())||a.raza?.toLowerCase().includes(search.toLowerCase());
     const matchCampo = campoFil==="Todos"||a.campo===campoFil;
-    return matchSearch&&matchCampo;
+    const matchSoc = !socFilAni || a.sociedad===socFilAni;
+    return matchSearch&&matchCampo&&matchSoc;
   });
 
   const save = async ()=>{
@@ -1585,7 +1587,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
     const cpc = Number(editItem.costo_por_cabeza||0);
     const total = cabezas*cpc;
     const raza = editItem.raza==="Otra"?editItem.razaCustom:editItem.raza;
-    const row={rodeo:editItem.rodeo,campo:editItem.campo,lote:editItem.lote,tipo:editItem.tipo,raza,cabezas,costo_por_cabeza:cpc,costo:total,fecha:editItem.fecha||todayISO()};
+    const row={rodeo:editItem.rodeo,campo:editItem.campo,lote:editItem.lote,tipo:editItem.tipo,raza,cabezas,costo_por_cabeza:cpc,costo:total,fecha:editItem.fecha||todayISO(),sociedad:editItem.sociedad||""};
 
     const isEdit = !!editItem.id_real;
     let oldCosto = 0;
@@ -1710,11 +1712,15 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
             <option>Todos</option>
             {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
           </select>
+          <select value={socFilAni} onChange={e=>setSocFilAni(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#fff"}}>
+            <option value="">Todas las sociedades</option>
+            {SOCIEDADES.map(s=><option key={s} value={s}>{s}</option>)}
+          </select>
         </div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr style={{borderBottom:"2px solid #f3f4f6"}}>
-              {["Rodeo","Campo","Lote","Tipo","Raza","Cabezas","$/cab","Costo total","Formado","Acciones"].map(h=>(
+              {["Rodeo","Campo","Lote","Tipo","Raza","Cabezas","$/cab","Costo total","Sociedad","Formado","Acciones"].map(h=>(
                 <th key={h} style={{textAlign:"left",padding:"10px 12px",fontSize:12,fontWeight:700,color:"#6b7280",whiteSpace:"nowrap"}}>{h}</th>
               ))}
             </tr></thead>
@@ -1729,6 +1735,11 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                   <td style={{padding:"12px",color:"#16a34a",fontWeight:800,fontSize:16}}>{a.cabezas}</td>
                   <td style={{padding:"12px",fontSize:13}}>{fmt(a.costo_por_cabeza||0)}</td>
                   <td style={{padding:"12px",fontSize:13,fontWeight:600}}>{fmtK(a.costo||0)}</td>
+                  <td style={{padding:"12px",fontSize:12}}>
+                    {a.sociedad ? (
+                      <span style={{fontWeight:700,padding:"3px 10px",borderRadius:10,background:SOC_COLOR[a.sociedad]+"22",color:SOC_COLOR[a.sociedad]||"#374151"}}>{a.sociedad}</span>
+                    ) : <span style={{color:"#9ca3af",fontSize:11}}>—</span>}
+                  </td>
                   <td style={{padding:"12px",fontSize:12,color:"#6b7280"}}>{fmtDate(a.fecha)}</td>
                   <td style={{padding:"12px"}}>
                     <div style={{display:"flex",gap:4}}>
@@ -1798,6 +1809,10 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
             <div style={{fontSize:12,color:"#6b7280",marginTop:2}}>USD: <b>{fmtUSD(totalCalc,dolar)}</b></div>
           </div>
           <Inp label="Fecha" type="date" value={editItem.fecha} onChange={e=>setEditItem({...editItem,fecha:e.target.value})}/>
+          <Sel label="Sociedad" value={editItem.sociedad||""} onChange={e=>setEditItem({...editItem,sociedad:e.target.value})}>
+            <option value="">— Sin asignar —</option>
+            {SOCIEDADES.map(s=><option key={s} value={s}>{s}</option>)}
+          </Sel>
           <div style={{display:"flex",gap:10,marginTop:8}}>
             <Btn variant="secondary" onClick={()=>setEditItem(null)} full>Cancelar</Btn>
             <Btn variant="primary" onClick={save} full><I.save/> Guardar</Btn>
@@ -1959,8 +1974,13 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
     const cs = getCantSoc(comprarItem.item);
     cs[comprarItem.sociedad] = Number(cs[comprarItem.sociedad]||0) + cantNueva;
     const fechaCompra = comprarItem.fecha || todayISO();
-    await sb.from("stock").update({cantidad:cantActual+cantNueva,costo_unit:newAvg,cantidades_soc:cs}).eq("id",comprarItem.item.id);
-    await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
+    const fechaLlegada = comprarItem.fecha_llegada||null;
+    // Guardar fecha_llegada en el stock (campo extra)
+    const stockUpdate = {cantidad:cantActual+cantNueva,costo_unit:newAvg,cantidades_soc:cs};
+    if(fechaLlegada) stockUpdate.fecha_llegada = fechaLlegada;
+    await sb.from("stock").update(stockUpdate).eq("id",comprarItem.item.id);
+    const conceptoCompra = `Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`+(fechaLlegada?:"");
+    await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
     toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre} (${comprarItem.sociedad})`);
     setComprarItem(null); reload();
   };
@@ -2105,7 +2125,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr style={{borderBottom:"2px solid #f3f4f6"}}>
-              {["Insumo","Categoría","Cantidad","Costo Unit.","Valor Total","Nivel","Campo","Acciones"].map(h=>(
+              {["Insumo","Categoría","Cantidad","Costo Unit.","Valor Total","Nivel","Campo","📦 Llegada","Acciones"].map(h=>(
                 <th key={h} style={{textAlign:"left",padding:"10px 12px",fontSize:12,fontWeight:700,color:"#6b7280",whiteSpace:"nowrap"}}>{h}</th>
               ))}
             </tr></thead>
@@ -2138,9 +2158,12 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                       </div>
                     </td>
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
+                    <td style={{padding:"12px",fontSize:12,color:s.fecha_llegada&&new Date(s.fecha_llegada)>new Date()?"#1d4ed8":"#9ca3af",whiteSpace:"nowrap"}}>
+                      {s.fecha_llegada ? <span title="Fecha estimada de llegada">🚚 {fmtDate(s.fecha_llegada)}</span> : "—"}
+                    </td>
                     <td style={{padding:"12px"}}>
                       <div style={{display:"flex",gap:4}}>
-                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit,sociedad:"",fecha:todayISO(),moneda:"ARS",tc:dolar})}>+ Comprar</Btn></EditOnly>
+                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit,sociedad:"",fecha:todayISO(),fecha_llegada:"",moneda:"ARS",tc:dolar})}>+ Comprar</Btn></EditOnly>
                         <EditOnly>
                           <Btn variant="ghost" small onClick={()=>setTransferItem({
                             item:s,
@@ -2264,6 +2287,13 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
           </Sel>
           {/* 🆕 Fecha de la compra (hoy por defecto, editable) */}
           <Inp label="Fecha de la compra" type="date" value={comprarItem.fecha||todayISO()} onChange={e=>setComprarItem({...comprarItem,fecha:e.target.value})}/>
+          {/* 🆕 Fecha estimada de llegada */}
+          <Inp label="📦 Fecha estimada de llegada (opcional)" type="date" value={comprarItem.fecha_llegada||""} onChange={e=>setComprarItem({...comprarItem,fecha_llegada:e.target.value})}/>
+          {comprarItem.fecha_llegada&&comprarItem.fecha&&comprarItem.fecha_llegada>comprarItem.fecha&&(
+            <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#1d4ed8"}}>
+              🚚 Llega en {Math.round((new Date(comprarItem.fecha_llegada)-new Date(comprarItem.fecha))/(1000*60*60*24))} días desde la compra
+            </div>
+          )}
 
           <div style={{background:"#fef9c3",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
             Total compra: <b>{fmt(totalARS)}</b>
@@ -3107,18 +3137,40 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const CATS=["Compra insumos","Labores contratadas","Combustible","Sueldos","Fletes","Compra hacienda","Mantenimiento","Servicios","Otros"];
 
-  // 🆕 Filtro por mes calendario (del 1 al último día). Por defecto, mes actual.
+  // Filtros
   const [mesFil,setMesFil]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;});
+  const [catFil,setCatFil]=useState("Todas");
+  const [campFil,setCampFil]=useState("Todos");
+  const [monedaVista,setMonedaVista]=useState("ARS"); // ARS o USD
+  const [conceptoBus,setConceptoBus]=useState("");
+  const [montoMin,setMontoMin]=useState("");
+  const [montoMax,setMontoMax]=useState("");
+  const [fechaDesde,setFechaDesde]=useState("");
+  const [fechaHasta,setFechaHasta]=useState("");
+  const [usarRango,setUsarRango]=useState(false); // false = filtrar por mes; true = por rango
+
+  // USD de un gasto: usa su tc propio si lo tiene, sino el dólar global
+  const usdDe = (f)=> Number(f.tc)>0 ? Number(f.monto||0)/Number(f.tc) : Number(f.monto||0)/dolar;
 
   // Gastos del mes elegido (del día 1 al último día de ese mes)
   const gastosMes = data.finanzas.filter(f=>{
     if(!f.fecha) return false;
-    return f.fecha.substring(0,7)===mesFil; // YYYY-MM
+    if(usarRango){
+      if(fechaDesde && f.fecha < fechaDesde) return false;
+      if(fechaHasta && f.fecha > fechaHasta) return false;
+    } else {
+      if(f.fecha.substring(0,7)!==mesFil) return false;
+    }
+    if(catFil!=="Todas" && f.categoria!==catFil) return false;
+    if(campFil!=="Todos" && f.campo!==campFil) return false;
+    if(conceptoBus && !f.concepto?.toLowerCase().includes(conceptoBus.toLowerCase())) return false;
+    const monto = monedaVista==="USD" ? usdDe(f) : Number(f.monto||0);
+    if(montoMin && monto < Number(montoMin)) return false;
+    if(montoMax && monto > Number(montoMax)) return false;
+    return true;
   });
   const egresos = gastosMes.reduce((s,f)=>s+Number(f.monto||0),0);
 
-  // USD de un gasto: usa su tc propio si lo tiene, sino el dólar global
-  const usdDe = (f)=> Number(f.tc)>0 ? Number(f.monto||0)/Number(f.tc) : Number(f.monto||0)/dolar;
   const egresosUSD = gastosMes.reduce((s,f)=>s+usdDe(f),0);
 
   const nombreMes = (()=>{
@@ -3169,16 +3221,63 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
 
   return(
     <div>
-      {/* 🆕 Selector de mes calendario (del 1 al 1) */}
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
-        <span style={{fontSize:13,color:"#6b7280",fontWeight:600}}>Mes:</span>
-        <input type="month" value={mesFil} onChange={e=>setMesFil(e.target.value)} style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}}/>
-        <span style={{fontSize:13,color:"#374151",textTransform:"capitalize",fontWeight:600}}>{nombreMes}</span>
+      {/* ── PANEL DE FILTROS ── */}
+      <div style={{background:"#fff",borderRadius:14,padding:16,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+        <div style={{fontWeight:700,fontSize:14,marginBottom:12,display:"flex",alignItems:"center",gap:8}}>🔍 Filtros</div>
+
+        {/* Fila 1: modo fecha */}
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+          <label style={{fontSize:13,display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+            <input type="radio" checked={!usarRango} onChange={()=>setUsarRango(false)}/> Por mes
+          </label>
+          <label style={{fontSize:13,display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+            <input type="radio" checked={usarRango} onChange={()=>setUsarRango(true)}/> Por rango de fechas
+          </label>
+          {!usarRango && (
+            <>
+              <input type="month" value={mesFil} onChange={e=>setMesFil(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}}/>
+              <span style={{fontSize:13,color:"#374151",textTransform:"capitalize",fontWeight:600}}>{nombreMes}</span>
+            </>
+          )}
+          {usarRango && (
+            <>
+              <input type="date" value={fechaDesde} onChange={e=>setFechaDesde(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}} placeholder="Desde"/>
+              <span style={{fontSize:12,color:"#9ca3af"}}>→</span>
+              <input type="date" value={fechaHasta} onChange={e=>setFechaHasta(e.target.value)} style={{padding:"6px 10px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}} placeholder="Hasta"/>
+            </>
+          )}
+        </div>
+
+        {/* Fila 2: categoría, campo, moneda */}
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:12}}>
+          <select value={catFil} onChange={e=>setCatFil(e.target.value)} style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#fff"}}>
+            <option value="Todas">Todas las categorías</option>
+            {CATS.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+          <select value={campFil} onChange={e=>setCampFil(e.target.value)} style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#fff"}}>
+            <option value="Todos">Todos los campos</option>
+            {data.campos.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
+          </select>
+          <select value={monedaVista} onChange={e=>setMonedaVista(e.target.value)} style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#fff"}}>
+            <option value="ARS">Ver montos en ARS $</option>
+            <option value="USD">Ver montos en USD U$</option>
+          </select>
+        </div>
+
+        {/* Fila 3: concepto y rango de monto */}
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
+          <input value={conceptoBus} onChange={e=>setConceptoBus(e.target.value)} placeholder="🔤 Buscar concepto..." style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,minWidth:200}}/>
+          <input type="number" value={montoMin} onChange={e=>setMontoMin(e.target.value)} placeholder={`Monto mín (${monedaVista})`} style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,width:160}}/>
+          <input type="number" value={montoMax} onChange={e=>setMontoMax(e.target.value)} placeholder={`Monto máx (${monedaVista})`} style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,width:160}}/>
+          {(catFil!=="Todas"||campFil!=="Todos"||conceptoBus||montoMin||montoMax||(usarRango&&(fechaDesde||fechaHasta)))&&(
+            <button onClick={()=>{setCatFil("Todas");setCampFil("Todos");setConceptoBus("");setMontoMin("");setMontoMax("");setFechaDesde("");setFechaHasta("");}} style={{padding:"7px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,background:"#f9fafb",cursor:"pointer",color:"#6b7280"}}>✕ Limpiar</button>
+          )}
+        </div>
       </div>
 
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label={`Gastos de ${nombreMes}`} value={fmtK(egresos)} sub={`U$ ${egresosUSD.toLocaleString("es-AR",{maximumFractionDigits:0})}`} color="#ef4444"/>
-        <KPI label="Movimientos del mes" value={gastosMes.length}/>
+        <KPI label="Gastos filtrados" value={fmtK(egresos)} sub={`U$ ${egresosUSD.toLocaleString("es-AR",{maximumFractionDigits:0})}`} color="#ef4444"/>
+        <KPI label="Movimientos" value={gastosMes.length}/>
         <KPI label="Dólar sugerido" value={`$ ${dolar.toLocaleString("es-AR")}`} sub="Editable en Config"/>
       </div>
 
@@ -3196,7 +3295,11 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
       </div>
 
       <div style={{background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
-        <div style={{fontWeight:700,marginBottom:14}}>Movimientos de <span style={{textTransform:"capitalize"}}>{nombreMes}</span></div>
+        <div style={{fontWeight:700,marginBottom:14,display:"flex",alignItems:"center",gap:10}}>
+          Movimientos {usarRango?(fechaDesde||fechaHasta?`${fechaDesde?fmtDate(fechaDesde):"…"} → ${fechaHasta?fmtDate(fechaHasta):"…"}`:"— rango sin definir"):<span style={{textTransform:"capitalize"}}>{nombreMes}</span>}
+          {catFil!=="Todas"&&<span style={{fontSize:11,background:"#dbeafe",color:"#1d4ed8",padding:"2px 8px",borderRadius:10}}>Cat: {catFil}</span>}
+          {campFil!=="Todos"&&<span style={{fontSize:11,background:"#dcfce7",color:"#15803d",padding:"2px 8px",borderRadius:10}}>{campFil}</span>}
+        </div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr style={{borderBottom:"2px solid #f3f4f6"}}>
@@ -3213,8 +3316,8 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                   <td style={{padding:"10px",fontSize:13,maxWidth:240}}>{f.concepto}</td>
                   <td style={{padding:"10px",fontSize:12,color:"#6b7280"}}>{f.categoria}</td>
                   <td style={{padding:"10px",fontSize:12,color:"#6b7280"}}>{f.campo||"—"}</td>
-                  <td style={{padding:"10px",fontWeight:700,color:"#ef4444",whiteSpace:"nowrap"}}>-{fmtK(f.monto)}</td>
-                  <td style={{padding:"10px",fontSize:12,color:"#9ca3af",whiteSpace:"nowrap"}}>U$ {usdDe(f).toLocaleString("es-AR",{maximumFractionDigits:0})}</td>
+                  <td style={{padding:"10px",fontWeight:700,color:monedaVista==="ARS"?"#ef4444":"#9ca3af",whiteSpace:"nowrap"}}>-{fmtK(f.monto)}</td>
+                  <td style={{padding:"10px",fontSize:monedaVista==="USD"?13:12,fontWeight:monedaVista==="USD"?700:400,color:monedaVista==="USD"?"#ef4444":"#9ca3af",whiteSpace:"nowrap"}}>U$ {usdDe(f).toLocaleString("es-AR",{maximumFractionDigits:0})}</td>
                   <td style={{padding:"10px",fontSize:12,color:"#9ca3af",whiteSpace:"nowrap"}}>{Number(f.tc)>0?`$ ${Number(f.tc).toLocaleString("es-AR")}`:"—"}</td>
                   <td style={{padding:"10px",fontSize:11,color:"#9ca3af"}}>{f.origen||"manual"}</td>
                   <td style={{padding:"10px"}}>
