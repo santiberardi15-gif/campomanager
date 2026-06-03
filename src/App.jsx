@@ -1857,7 +1857,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
 
 
 // ── STOCK ───────────────────────────────────────────────────────────────────
-function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
+function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   const EMPTY={nombre:"",nombreCustom:"",unidad:"kg",categoria:"Fertilizante",cantidad:"",minimo:"",costo_unit:"",ubicacion:"",sociedad:""};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [comprarItem,setComprarItem]=useState(null);
@@ -1933,16 +1933,24 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
     if(!comprarItem.cantidad||!comprarItem.costo_unit){toast("Faltan datos","error");return;}
     if(!comprarItem.sociedad){toast("Elegí la sociedad","error");return;}
     const cantNueva = Number(comprarItem.cantidad);
-    const costo = Number(comprarItem.costo_unit);
+    const tc = Number(comprarItem.tc||0);
+    // 🆕 El costo unitario puede venir en ARS o USD. Lo normalizo a ARS.
+    let costoARS;
+    if(comprarItem.moneda==="USD"){
+      if(!tc){toast("Poné el tipo de cambio de la factura","error");return;}
+      costoARS = Number(comprarItem.costo_unit)*tc;
+    } else {
+      costoARS = Number(comprarItem.costo_unit);
+    }
     const cantActual = Number(comprarItem.item.cantidad);
-    const total = cantNueva*costo;
-    const newAvg = ((cantActual*Number(comprarItem.item.costo_unit))+(cantNueva*costo))/(cantActual+cantNueva);
+    const total = cantNueva*costoARS;
+    const newAvg = ((cantActual*Number(comprarItem.item.costo_unit))+(cantNueva*costoARS))/(cantActual+cantNueva);
     // 🆕 sumar la compra a la sociedad elegida
     const cs = getCantSoc(comprarItem.item);
     cs[comprarItem.sociedad] = Number(cs[comprarItem.sociedad]||0) + cantNueva;
     const fechaCompra = comprarItem.fecha || todayISO();
     await sb.from("stock").update({cantidad:cantActual+cantNueva,costo_unit:newAvg,cantidades_soc:cs}).eq("id",comprarItem.item.id);
-    await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,origen:"stock_compra",origen_id:comprarItem.item.id});
+    await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
     toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre} (${comprarItem.sociedad})`);
     setComprarItem(null); reload();
   };
@@ -2122,7 +2130,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
                     <td style={{padding:"12px"}}>
                       <div style={{display:"flex",gap:4}}>
-                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit,sociedad:"",fecha:todayISO()})}>+ Comprar</Btn></EditOnly>
+                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit,sociedad:"",fecha:todayISO(),moneda:"ARS",tc:dolar})}>+ Comprar</Btn></EditOnly>
                         <EditOnly>
                           <Btn variant="ghost" small onClick={()=>setTransferItem({
                             item:s,
@@ -2200,13 +2208,31 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
         </Modal>
       )}
 
-      {comprarItem&&(
+      {comprarItem&&(()=>{
+        const tc = Number(comprarItem.tc||0);
+        const cant = Number(comprarItem.cantidad)||0;
+        const costo = Number(comprarItem.costo_unit)||0;
+        // total en ARS según moneda elegida
+        const totalARS = comprarItem.moneda==="USD" ? cant*costo*(tc||0) : cant*costo;
+        return(
         <Modal title={`Comprar ${comprarItem.item.nombre}`} onClose={()=>setComprarItem(null)}>
           <div style={{background:"#f0fdf4",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
             Stock actual: <b>{comprarItem.item.cantidad} {comprarItem.item.unidad}</b>
           </div>
           <Inp label={`Cantidad a agregar (${comprarItem.item.unidad})`} type="number" value={comprarItem.cantidad} onChange={e=>setComprarItem({...comprarItem,cantidad:e.target.value})}/>
-          <Inp label="Costo unitario actual ($)" type="number" value={comprarItem.costo_unit} onChange={e=>setComprarItem({...comprarItem,costo_unit:e.target.value})}/>
+
+          {/* 🆕 Moneda de la compra */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Sel label="Moneda" value={comprarItem.moneda||"ARS"} onChange={e=>setComprarItem({...comprarItem,moneda:e.target.value})}>
+              <option value="ARS">Pesos (ARS)</option>
+              <option value="USD">Dólares (USD)</option>
+            </Sel>
+            <Inp label={comprarItem.moneda==="USD"?"Costo unitario (USD)":"Costo unitario (ARS)"} type="number" value={comprarItem.costo_unit} onChange={e=>setComprarItem({...comprarItem,costo_unit:e.target.value})}/>
+          </div>
+
+          {/* 🆕 Tipo de cambio de la factura */}
+          <Inp label="Tipo de cambio (de la factura)" type="number" value={comprarItem.tc} onChange={e=>setComprarItem({...comprarItem,tc:e.target.value})} placeholder={`Sugerido: ${dolar}`}/>
+
           {/* 🆕 A qué sociedad entra esta compra */}
           <Sel label="Sociedad que compra" value={comprarItem.sociedad||""} onChange={e=>setComprarItem({...comprarItem,sociedad:e.target.value})}>
             <option value="">Seleccionar...</option>
@@ -2214,15 +2240,18 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
           </Sel>
           {/* 🆕 Fecha de la compra (hoy por defecto, editable) */}
           <Inp label="Fecha de la compra" type="date" value={comprarItem.fecha||todayISO()} onChange={e=>setComprarItem({...comprarItem,fecha:e.target.value})}/>
+
           <div style={{background:"#fef9c3",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
-            Total compra: <b>{fmt((Number(comprarItem.cantidad)||0)*(Number(comprarItem.costo_unit)||0))}</b>
+            Total compra: <b>{fmt(totalARS)}</b>
+            {comprarItem.moneda==="USD" && tc>0 && <div style={{fontSize:12,color:"#92400e",marginTop:2}}>U$ {(cant*costo).toLocaleString("es-AR",{maximumFractionDigits:0})} × ${tc.toLocaleString("es-AR")}</div>}
           </div>
           <div style={{display:"flex",gap:10,marginTop:8}}>
             <Btn variant="secondary" onClick={()=>setComprarItem(null)} full>Cancelar</Btn>
             <Btn variant="primary" onClick={comprar} full><I.plus/> Registrar compra</Btn>
           </div>
         </Modal>
-      )}
+        );
+      })()}
 
       {transferItem&&(()=>{
         const camposDisponibles = data.campos.filter(c=>c.nombre!==transferItem.item.ubicacion);
@@ -3107,7 +3136,7 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   const meses=[];
   for(let i=5;i>=0;i--){
     const d=new Date(); d.setMonth(d.getMonth()-i);
-    meses.push({key:`${d.getFullYear()}-${d.getMonth()}`,label:d.toLocaleDateString("es-AR",{month:"short",year:"2-digit"})});
+    meses.push({key:`${d.getFullYear()}-${d.getMonth()}`,label:d.toLocaleDateString("es-AR",{month:"short"})});
   }
   const flujo = meses.map(m2=>({
     mes:m2.label,
