@@ -1858,7 +1858,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
 
 // ── STOCK ───────────────────────────────────────────────────────────────────
 function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
-  const EMPTY={nombre:"",nombreCustom:"",unidad:"kg",categoria:"Fertilizante",cantidad:"",minimo:"",costo_unit:"",ubicacion:"",sociedad:""};
+  const EMPTY={nombre:"",nombreCustom:"",unidad:"kg",categoria:"Fertilizante",cantidad:"",minimo:"",costo_unit:"",ubicacion:"",sociedad:"",moneda:"ARS",tc:dolar};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [comprarItem,setComprarItem]=useState(null);
   const [transferItem,setTransferItem]=useState(null);
@@ -1882,6 +1882,16 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
     const nombreFinal = editItem.nombre==="Otro"?editItem.nombreCustom:editItem.nombre;
     if(!nombreFinal){toast("Faltan campos","error");return;}
     const cant = Number(editItem.cantidad||0);
+    const tc = Number(editItem.tc||0);
+
+    // 🆕 Costo unitario normalizado a ARS según la moneda elegida
+    let costoUnitARS;
+    if(editItem.moneda==="USD"){
+      if(!tc){toast("Poné el tipo de cambio de la factura","error");return;}
+      costoUnitARS = Number(editItem.costo_unit||0)*tc;
+    } else {
+      costoUnitARS = Number(editItem.costo_unit||0);
+    }
 
     // 🆕 Armar el reparto por sociedad
     let cantidades_soc;
@@ -1909,7 +1919,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
       categoria:editItem.categoria,
       cantidad:cant,
       minimo:Number(editItem.minimo||0),
-      costo_unit:Number(editItem.costo_unit||0),
+      costo_unit:costoUnitARS,
       ubicacion:editItem.ubicacion,
       cantidades_soc,
     };
@@ -1922,7 +1932,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
       const {data:inserted,error}=await sb.from("stock").insert({...row,org_id:orgId}).select().single();
       if(error){toast(error.message,"error");return;}
       if(total>0){
-        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,monto:total,origen:"stock",origen_id:inserted.id});
+        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,monto:total,tc:tc||dolar,origen:"stock",origen_id:inserted.id});
       }
       toast("Insumo agregado");
     }
@@ -2142,7 +2152,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                           const cs=getCantSoc(s);
                           const socs=SOCIEDADES.filter(soc=>cs[soc]>0);
                           const unaSola = socs.length===1 ? socs[0] : "";
-                          setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:"",sociedad:unaSola});
+                          setEditItem({...s,id_real:s.id,nombre:s.nombre,nombreCustom:"",sociedad:unaSola,moneda:"ARS",tc:dolar});
                         }}/>
                         <DelBtn onClick={()=>setConfirm(s.id)}/>
                       </div>
@@ -2190,7 +2200,21 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
             <Inp label="Cantidad" type="number" value={editItem.cantidad} onChange={e=>setEditItem({...editItem,cantidad:e.target.value})}/>
             <Inp label="Stock mínimo" type="number" value={editItem.minimo} onChange={e=>setEditItem({...editItem,minimo:e.target.value})}/>
           </div>
-          <Inp label="Costo unitario ($)" type="number" value={editItem.costo_unit} onChange={e=>setEditItem({...editItem,costo_unit:e.target.value})}/>
+          {/* 🆕 Moneda + costo unitario */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <Sel label="Moneda" value={editItem.moneda||"ARS"} onChange={e=>setEditItem({...editItem,moneda:e.target.value})}>
+              <option value="ARS">Pesos (ARS)</option>
+              <option value="USD">Dólares (USD)</option>
+            </Sel>
+            <Inp label={editItem.moneda==="USD"?"Costo unitario (USD)":"Costo unitario (ARS)"} type="number" value={editItem.costo_unit} onChange={e=>setEditItem({...editItem,costo_unit:e.target.value})}/>
+          </div>
+          {/* 🆕 Tipo de cambio de la factura */}
+          <Inp label="Tipo de cambio (de la factura)" type="number" value={editItem.tc} onChange={e=>setEditItem({...editItem,tc:e.target.value})} placeholder={`Sugerido: ${dolar}`}/>
+          {editItem.moneda==="USD" && Number(editItem.costo_unit)>0 && Number(editItem.tc)>0 && (
+            <div style={{background:"#f0fdf4",borderRadius:8,padding:10,fontSize:13,marginBottom:10}}>
+              Costo unitario en pesos: <b>{fmt(Number(editItem.costo_unit)*Number(editItem.tc))}</b>
+            </div>
+          )}
           {/* 🆕 Sociedad dueña de esta cantidad */}
           <Sel label="Sociedad (razón social)" value={editItem.sociedad||""} onChange={e=>setEditItem({...editItem,sociedad:e.target.value})}>
             <option value="">— Sin asignar —</option>
