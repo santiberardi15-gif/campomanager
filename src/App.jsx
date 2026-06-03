@@ -1940,8 +1940,9 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
     // 🆕 sumar la compra a la sociedad elegida
     const cs = getCantSoc(comprarItem.item);
     cs[comprarItem.sociedad] = Number(cs[comprarItem.sociedad]||0) + cantNueva;
+    const fechaCompra = comprarItem.fecha || todayISO();
     await sb.from("stock").update({cantidad:cantActual+cantNueva,costo_unit:newAvg,cantidades_soc:cs}).eq("id",comprarItem.item.id);
-    await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,origen:"stock_compra",origen_id:comprarItem.item.id});
+    await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:`Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,origen:"stock_compra",origen_id:comprarItem.item.id});
     toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre} (${comprarItem.sociedad})`);
     setComprarItem(null); reload();
   };
@@ -2121,7 +2122,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
                     <td style={{padding:"12px"}}>
                       <div style={{display:"flex",gap:4}}>
-                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit,sociedad:""})}>+ Comprar</Btn></EditOnly>
+                        <EditOnly><Btn variant="secondary" small onClick={()=>setComprarItem({item:s,cantidad:"",costo_unit:s.costo_unit,sociedad:"",fecha:todayISO()})}>+ Comprar</Btn></EditOnly>
                         <EditOnly>
                           <Btn variant="ghost" small onClick={()=>setTransferItem({
                             item:s,
@@ -2211,6 +2212,8 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal}){
             <option value="">Seleccionar...</option>
             {SOCIEDADES.map(s=><option key={s} value={s}>{s}</option>)}
           </Sel>
+          {/* 🆕 Fecha de la compra (hoy por defecto, editable) */}
+          <Inp label="Fecha de la compra" type="date" value={comprarItem.fecha||todayISO()} onChange={e=>setComprarItem({...comprarItem,fecha:e.target.value})}/>
           <div style={{background:"#fef9c3",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
             Total compra: <b>{fmt((Number(comprarItem.cantidad)||0)*(Number(comprarItem.costo_unit)||0))}</b>
           </div>
@@ -3047,14 +3050,41 @@ function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
 
 // ── FINANZAS ────────────────────────────────────────────────────────────────
 function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
-  const EMPTY={fecha:todayISO(),concepto:"",categoria:"Otros",campo:"",monto:""};
+  const EMPTY={fecha:todayISO(),concepto:"",categoria:"Otros",campo:"",monto:"",moneda:"ARS",tc:dolar};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
-  const egresos=data.finanzas.reduce((s,f)=>s+Number(f.monto||0),0);
   const CATS=["Compra insumos","Labores contratadas","Combustible","Sueldos","Fletes","Compra hacienda","Mantenimiento","Servicios","Otros"];
+
+  // 🆕 Filtro por mes calendario (del 1 al último día). Por defecto, mes actual.
+  const [mesFil,setMesFil]=useState(()=>{const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;});
+
+  // Gastos del mes elegido (del día 1 al último día de ese mes)
+  const gastosMes = data.finanzas.filter(f=>{
+    if(!f.fecha) return false;
+    return f.fecha.substring(0,7)===mesFil; // YYYY-MM
+  });
+  const egresos = gastosMes.reduce((s,f)=>s+Number(f.monto||0),0);
+
+  // USD de un gasto: usa su tc propio si lo tiene, sino el dólar global
+  const usdDe = (f)=> Number(f.tc)>0 ? Number(f.monto||0)/Number(f.tc) : Number(f.monto||0)/dolar;
+  const egresosUSD = gastosMes.reduce((s,f)=>s+usdDe(f),0);
+
+  const nombreMes = (()=>{
+    const [y,m]=mesFil.split("-");
+    return new Date(Number(y),Number(m)-1,1).toLocaleDateString("es-AR",{month:"long",year:"numeric"});
+  })();
 
   const save = async ()=>{
     if(!editItem.concepto||!editItem.monto){toast("Faltan campos","error");return;}
-    const row={fecha:editItem.fecha,tipo:"Egreso",concepto:editItem.concepto,categoria:editItem.categoria,campo:editItem.campo,monto:Number(editItem.monto)};
+    const tc = Number(editItem.tc||0);
+    // 🆕 El monto se guarda SIEMPRE en ARS. Si cargó en USD, convierto con el tc.
+    let montoARS;
+    if(editItem.moneda==="USD"){
+      if(!tc){toast("Poné el tipo de cambio de la factura","error");return;}
+      montoARS = Number(editItem.monto)*tc;
+    } else {
+      montoARS = Number(editItem.monto);
+    }
+    const row={fecha:editItem.fecha,tipo:"Egreso",concepto:editItem.concepto,categoria:editItem.categoria,campo:editItem.campo,monto:montoARS,tc:tc||dolar};
     if(editItem.id){
       const {error}=await sb.from("finanzas").update(row).eq("id",editItem.id);
       if(error){toast(error.message,"error");return;}
@@ -3086,10 +3116,17 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
 
   return(
     <div>
+      {/* 🆕 Selector de mes calendario (del 1 al 1) */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <span style={{fontSize:13,color:"#6b7280",fontWeight:600}}>Mes:</span>
+        <input type="month" value={mesFil} onChange={e=>setMesFil(e.target.value)} style={{padding:"7px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13}}/>
+        <span style={{fontSize:13,color:"#374151",textTransform:"capitalize",fontWeight:600}}>{nombreMes}</span>
+      </div>
+
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label="Gastos totales" value={fmtK(egresos)} sub={fmtUSD(egresos,dolar)} color="#ef4444"/>
-        <KPI label="Movimientos" value={data.finanzas.length}/>
-        <KPI label="Dólar oficial" value={`$ ${dolar.toLocaleString("es-AR")}`} sub="Editable en Config"/>
+        <KPI label={`Gastos de ${nombreMes}`} value={fmtK(egresos)} sub={`U$ ${egresosUSD.toLocaleString("es-AR",{maximumFractionDigits:0})}`} color="#ef4444"/>
+        <KPI label="Movimientos del mes" value={gastosMes.length}/>
+        <KPI label="Dólar sugerido" value={`$ ${dolar.toLocaleString("es-AR")}`} sub="Editable en Config"/>
       </div>
 
       <div style={{background:"#fff",borderRadius:14,padding:20,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
@@ -3106,27 +3143,30 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
       </div>
 
       <div style={{background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
-        <div style={{fontWeight:700,marginBottom:14}}>Movimientos</div>
+        <div style={{fontWeight:700,marginBottom:14}}>Movimientos de <span style={{textTransform:"capitalize"}}>{nombreMes}</span></div>
         <div style={{overflowX:"auto"}}>
           <table style={{width:"100%",borderCollapse:"collapse"}}>
             <thead><tr style={{borderBottom:"2px solid #f3f4f6"}}>
-              {["Fecha","Concepto","Categoría","Campo","Monto ARS","Monto USD","Origen","Acciones"].map(h=>(
+              {["Fecha","Concepto","Categoría","Campo","Monto ARS","Monto USD","T.C.","Origen","Acciones"].map(h=>(
                 <th key={h} style={{textAlign:"left",padding:"10px 12px",fontSize:12,fontWeight:700,color:"#6b7280",whiteSpace:"nowrap"}}>{h}</th>
               ))}
             </tr></thead>
             <tbody>
-              {data.finanzas.sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")).map(f=>(
+              {gastosMes.length===0
+                ? <tr><td colSpan={9} style={{padding:"24px",textAlign:"center",color:"#9ca3af",fontSize:14}}>Sin movimientos en este mes</td></tr>
+                : gastosMes.sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||"")).map(f=>(
                 <tr key={f.id} style={{borderBottom:"1px solid #f9fafb"}}>
                   <td style={{padding:"10px",fontSize:13}}>{fmtDate(f.fecha)}</td>
                   <td style={{padding:"10px",fontSize:13,maxWidth:240}}>{f.concepto}</td>
                   <td style={{padding:"10px",fontSize:12,color:"#6b7280"}}>{f.categoria}</td>
                   <td style={{padding:"10px",fontSize:12,color:"#6b7280"}}>{f.campo||"—"}</td>
                   <td style={{padding:"10px",fontWeight:700,color:"#ef4444",whiteSpace:"nowrap"}}>-{fmtK(f.monto)}</td>
-                  <td style={{padding:"10px",fontSize:12,color:"#9ca3af",whiteSpace:"nowrap"}}>{fmtUSD(f.monto,dolar)}</td>
+                  <td style={{padding:"10px",fontSize:12,color:"#9ca3af",whiteSpace:"nowrap"}}>U$ {usdDe(f).toLocaleString("es-AR",{maximumFractionDigits:0})}</td>
+                  <td style={{padding:"10px",fontSize:12,color:"#9ca3af",whiteSpace:"nowrap"}}>{Number(f.tc)>0?`$ ${Number(f.tc).toLocaleString("es-AR")}`:"—"}</td>
                   <td style={{padding:"10px",fontSize:11,color:"#9ca3af"}}>{f.origen||"manual"}</td>
                   <td style={{padding:"10px"}}>
                     <div style={{display:"flex",gap:4}}>
-                      <EditBtn onClick={()=>setEditItem({...f})}/>
+                      <EditBtn onClick={()=>setEditItem({...f,moneda:"ARS",tc:Number(f.tc)>0?f.tc:dolar})}/>
                       <DelBtn onClick={()=>setConfirm(f.id)}/>
                     </div>
                   </td>
@@ -3137,7 +3177,14 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
         </div>
       </div>
 
-      {editItem&&(
+      {editItem&&(()=>{
+        const tc = Number(editItem.tc||0);
+        const monto = Number(editItem.monto||0);
+        // Previsualización del equivalente
+        const equiv = editItem.moneda==="USD"
+          ? (tc>0 ? monto*tc : 0)        // ingresó USD -> muestro ARS
+          : (tc>0 ? monto/tc : 0);       // ingresó ARS -> muestro USD
+        return(
         <Modal title={editItem.id?"Editar Movimiento":"Nuevo Egreso"} onClose={()=>setEditItem(null)}>
           <Inp label="Concepto" value={editItem.concepto} onChange={e=>setEditItem({...editItem,concepto:e.target.value})}/>
           <Sel label="Categoría" value={editItem.categoria} onChange={e=>setEditItem({...editItem,categoria:e.target.value})}>
@@ -3147,17 +3194,35 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
             <option value="">— Ninguno —</option>
             {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
           </Sel>
+          <Inp label="Fecha" type="date" value={editItem.fecha} onChange={e=>setEditItem({...editItem,fecha:e.target.value})}/>
+
+          {/* 🆕 Moneda + monto */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            <Inp label="Fecha" type="date" value={editItem.fecha} onChange={e=>setEditItem({...editItem,fecha:e.target.value})}/>
-            <Inp label="Monto ($)" type="number" value={editItem.monto} onChange={e=>setEditItem({...editItem,monto:e.target.value})}/>
+            <Sel label="Moneda" value={editItem.moneda||"ARS"} onChange={e=>setEditItem({...editItem,moneda:e.target.value})}>
+              <option value="ARS">Pesos (ARS)</option>
+              <option value="USD">Dólares (USD)</option>
+            </Sel>
+            <Inp label={editItem.moneda==="USD"?"Monto en USD":"Monto en ARS"} type="number" value={editItem.monto} onChange={e=>setEditItem({...editItem,monto:e.target.value})}/>
           </div>
-          {editItem.monto&&<div style={{background:"#f0fdf4",borderRadius:8,padding:10,fontSize:13,marginBottom:10}}>USD: <b>{fmtUSD(editItem.monto,dolar)}</b></div>}
+
+          {/* 🆕 Tipo de cambio de la factura */}
+          <Inp label="Tipo de cambio (de la factura)" type="number" value={editItem.tc} onChange={e=>setEditItem({...editItem,tc:e.target.value})} placeholder={`Sugerido: ${dolar}`}/>
+
+          {monto>0 && tc>0 && (
+            <div style={{background:"#f0fdf4",borderRadius:8,padding:10,fontSize:13,marginBottom:10}}>
+              {editItem.moneda==="USD"
+                ? <>Equivale a <b>{fmt(equiv)}</b> (se guarda en pesos)</>
+                : <>Equivale a <b>U$ {equiv.toLocaleString("es-AR",{maximumFractionDigits:0})}</b></>}
+            </div>
+          )}
+
           <div style={{display:"flex",gap:10,marginTop:8}}>
             <Btn variant="secondary" onClick={()=>setEditItem(null)} full>Cancelar</Btn>
             <Btn variant="primary" onClick={save} full><I.save/> Guardar</Btn>
           </div>
         </Modal>
-      )}
+        );
+      })()}
       {confirm&&<ConfirmModal msg="¿Eliminar este movimiento?" onConfirm={()=>del(confirm)} onCancel={()=>setConfirm(null)}/>}
     </div>
   );
