@@ -16,9 +16,8 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
 } from "recharts";
 
-// ── ⚠️ CONFIGURÁ ACÁ TUS CREDENCIALES DE SUPABASE ──
-const SUPABASE_URL = "https://iabyxkvlippfphtxnstx.supabase.co";
-const SUPABASE_KEY = "sb_publishable_etH9UCqAo0u9NF9dQoKWag_fBikSSuO";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY;
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
