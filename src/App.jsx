@@ -425,11 +425,18 @@ function ResumenPage({data,dolar,setPage}){
 
   const m = new Date().getMonth();
   const y = new Date().getFullYear();
-  const lluviaMes = lluvias.filter(l=>{
+
+  // 🆕 Lluvia acumulada anual. En "Todos" = promedio entre campos con registros este año.
+  //    Con un campo filtrado = el acumulado de ese campo.
+  const lluviasAnio = lluvias.filter(l=>{
     if(!l.fecha) return false;
-    const d = new Date(l.fecha);
-    return d.getMonth()===m && d.getFullYear()===y;
-  }).reduce((s,l)=>s+Number(l.mm||0),0);
+    return new Date(l.fecha).getFullYear()===y;
+  });
+  const lluviaAcumTotal = lluviasAnio.reduce((s,l)=>s+Number(l.mm||0),0);
+  const camposConLluvia = [...new Set(lluviasAnio.map(l=>l.campo))].filter(Boolean).length;
+  const lluviaPromedio = campoFil==="Todos"
+    ? (camposConLluvia>0 ? Math.round(lluviaAcumTotal/camposConLluvia) : 0)
+    : lluviaAcumTotal;
 
   // Build flujo de caja 6 meses
   const meses=[];
@@ -468,7 +475,7 @@ function ResumenPage({data,dolar,setPage}){
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
         <KPI label="Superficie" value={`${totalHa.toLocaleString("es-AR")} ha`} sub={`${campos.length} campos`} icon={<I.map/>}/>
         <KPI label="Stock animal" value={totalCab} sub={`${animales.length} rodeos`} icon={<I.cow/>}/>
-        <KPI label="Lluvia del mes" value={`${lluviaMes} mm`} icon={<I.rain/>}/>
+        <KPI label={campoFil==="Todos"?"Lluvia prom. anual (campos)":"Lluvia acum. anual"} value={`${lluviaPromedio} mm`} sub={campoFil==="Todos"&&camposConLluvia>0?`promedio de ${camposConLluvia} campo(s)`:undefined} icon={<I.rain/>}/>
         <KPI label="Gastos totales" value={fmtK(egresos)} sub={fmtUSD(egresos,dolar)} color="#ef4444" icon={<I.arrowDown/>}/>
         <KPI label="Insumos bajo stock" value={bajStock} color={bajStock>0?"#dc2626":"#16a34a"}/>
       </div>
@@ -1895,6 +1902,11 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   const save = async ()=>{
     const nombreFinal = editItem.nombre==="Otro"?editItem.nombreCustom:editItem.nombre;
     if(!nombreFinal){toast("Faltan campos","error");return;}
+    // 🆕 Al agregar un insumo NUEVO, la razón social y el campo son obligatorios
+    if(!editItem.id_real){
+      if(!editItem.sociedad){toast("Elegí la razón social","error");return;}
+      if(!editItem.ubicacion){toast("Elegí el campo","error");return;}
+    }
     const cant = Number(editItem.cantidad||0);
     const tc = Number(editItem.tc||0);
 
@@ -1954,21 +1966,26 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   };
 
   const comprar = async ()=>{
-    if(!comprarItem.cantidad||!comprarItem.costo_unit){toast("Faltan datos","error");return;}
+    if(!comprarItem.cantidad){toast("Poné la cantidad","error");return;}
     if(!comprarItem.sociedad){toast("Elegí la sociedad","error");return;}
     const cantNueva = Number(comprarItem.cantidad);
     const tc = Number(comprarItem.tc||0);
+    const costoIngresado = Number(comprarItem.costo_unit||0); // 🆕 puede quedar vacío (0)
     // 🆕 El costo unitario puede venir en ARS o USD. Lo normalizo a ARS.
     let costoARS;
-    if(comprarItem.moneda==="USD"){
+    if(comprarItem.moneda==="USD" && costoIngresado>0){
       if(!tc){toast("Poné el tipo de cambio de la factura","error");return;}
-      costoARS = Number(comprarItem.costo_unit)*tc;
+      costoARS = costoIngresado*tc;
     } else {
-      costoARS = Number(comprarItem.costo_unit);
+      costoARS = costoIngresado;
     }
     const cantActual = Number(comprarItem.item.cantidad);
     const total = cantNueva*costoARS;
-    const newAvg = ((cantActual*Number(comprarItem.item.costo_unit))+(cantNueva*costoARS))/(cantActual+cantNueva);
+    // 🆕 Si no se cargó precio en esta compra, mantené el costo unitario que ya tenía el insumo
+    const costoUnitPrevio = Number(comprarItem.item.costo_unit||0);
+    const newAvg = costoARS>0
+      ? ((cantActual*costoUnitPrevio)+(cantNueva*costoARS))/(cantActual+cantNueva)
+      : costoUnitPrevio;
     // 🆕 sumar la compra a la sociedad elegida
     const cs = getCantSoc(comprarItem.item);
     cs[comprarItem.sociedad] = Number(cs[comprarItem.sociedad]||0) + cantNueva;
@@ -1979,7 +1996,10 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
     if(fechaLlegada) stockUpdate.fecha_llegada = fechaLlegada;
     await sb.from("stock").update(stockUpdate).eq("id",comprarItem.item.id);
     const conceptoCompra = `Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`+(fechaLlegada?` · llega ${fmtDate(fechaLlegada)}`:"");
-    await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
+    // 🆕 Solo registramos el gasto si se cargó un precio (total > 0)
+    if(total>0){
+      await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
+    }
     toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre} (${comprarItem.sociedad})`);
     setComprarItem(null); reload();
   };
@@ -2525,10 +2545,20 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
     .filter(l=>campoFil==="Todos los campos"||l.campo===campoFil)
     .sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
 
-  const acum=filtered.reduce((s,l)=>s+Number(l.mm||0),0);
-  const mayor=filtered.length?Math.max(...filtered.map(l=>Number(l.mm||0))):0;
   const m=new Date().getMonth();
   const y=new Date().getFullYear();
+
+  // 🆕 Acumulado anual: en "Todos los campos" muestra el PROMEDIO entre los campos
+  //    que tienen registros este año; con un campo filtrado, el acumulado de ese campo.
+  const lluviasAnio = filtered.filter(l=>l.fecha && new Date(l.fecha).getFullYear()===y);
+  const acumAnioTotal = lluviasAnio.reduce((s,l)=>s+Number(l.mm||0),0);
+  const nCampos = [...new Set(lluviasAnio.map(l=>l.campo))].filter(Boolean).length;
+  const esTodos = campoFil==="Todos los campos";
+  const acum = esTodos
+    ? (nCampos>0 ? Math.round(acumAnioTotal/nCampos) : 0)
+    : acumAnioTotal;
+
+  const mayor=filtered.length?Math.max(...filtered.map(l=>Number(l.mm||0))):0;
   const esteMes = filtered.filter(l=>{
     if(!l.fecha) return false;
     const d=new Date(l.fecha);
@@ -2572,7 +2602,7 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
       </div>
 
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label="Acumulado anual" value={`${acum} mm`} icon={<I.rain/>}/>
+        <KPI label={esTodos?"Prom. anual (campos)":"Acumulado anual"} value={`${acum} mm`} sub={esTodos&&nCampos>0?`promedio de ${nCampos} campo(s)`:undefined} icon={<I.rain/>}/>
         <KPI label="Este mes" value={`${esteMes} mm`} icon={<I.cloud/>}/>
         <KPI label="Mayor evento" value={`${mayor} mm`} icon={<I.warn/>}/>
       </div>
@@ -4274,4 +4304,4 @@ export default function App(){
       <Toast msg={toastMsg?.msg} type={toastMsg?.type}/>
     </div>
   );
-}
+} 
