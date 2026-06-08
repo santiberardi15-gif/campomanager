@@ -312,6 +312,45 @@ const Spinner = ()=>(
 // ════════════════════════════════════════════════════════════════════════════
 // AUTH SCREEN
 // ════════════════════════════════════════════════════════════════════════════
+function SetPasswordScreen({onDone}){
+  const [password,setPassword]=useState("");
+  const [confirm,setConfirm]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [error,setError]=useState("");
+
+  const submit = async ()=>{
+    if(password.length<6) return setError("La contraseña debe tener al menos 6 caracteres");
+    if(password!==confirm) return setError("Las contraseñas no coinciden");
+    setError(""); setLoading(true);
+    try{
+      const {error} = await sb.auth.updateUser({password});
+      if(error) throw error;
+      onDone();
+    } catch(e){
+      setError(e.message||"Error desconocido");
+    }
+    setLoading(false);
+  };
+
+  return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"linear-gradient(135deg,#f0fdf4 0%,#dcfce7 100%)",padding:20,fontFamily:"'DM Sans',system-ui,sans-serif"}}>
+      <div style={{background:"#fff",borderRadius:18,padding:36,width:"100%",maxWidth:420,boxShadow:"0 20px 60px rgba(0,0,0,0.1)"}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{width:72,height:72,borderRadius:16,background:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:12,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={LOGO_URL} alt="María Amelia" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
+          <h1 style={{margin:0,fontSize:24,fontWeight:800}}>Campo Manager</h1>
+          <p style={{color:"#6b7280",marginTop:6,fontSize:14}}>Creá tu contraseña para continuar</p>
+        </div>
+        <Inp label="Nueva contraseña" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/>
+        <Inp label="Repetir contraseña" type="password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="••••••••"/>
+        {error&&<div style={{background:"#fef2f2",color:"#dc2626",padding:"10px 12px",borderRadius:8,fontSize:13,marginBottom:13}}>{error}</div>}
+        <Btn variant="primary" full onClick={submit} disabled={loading}>
+          {loading?"Guardando...":"Crear contraseña"}
+        </Btn>
+      </div>
+    </div>
+  );
+}
+
 function AuthScreen({onAuth}){
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
@@ -4024,6 +4063,7 @@ export default function App(){
   const [miRol,setMiRol]=useState(null);
   const [miMiembroId,setMiMiembroId]=useState(null);
   const [loadingAuth,setLoadingAuth]=useState(true);
+  const [needsPassword,setNeedsPassword]=useState(false);
   const [data,setData]=useState({campos:[],stock:[],animales:[],campanas:[],maquinaria:[],lluvias:[],finanzas:[],ordenes:[],documentos:[],colaboradores:[],miembros:[],notificaciones:[],movimientos:[]});
   const [dolar,setDolar]=useState(1420);
   const [page,setPage]=useState("resumen");
@@ -4034,14 +4074,23 @@ export default function App(){
 
   // AUTH
   useEffect(()=>{
+    // Detectar link de invitación
+    const hash = window.location.hash;
+    if(hash && hash.includes("type=invite")){
+      setNeedsPassword(true);
+    }
+
     sb.auth.getSession().then(({data})=>{
       setSession(data.session);
       setUser(data.session?.user||null);
       setLoadingAuth(false);
     });
-    const {data:listener} = sb.auth.onAuthStateChange((_e,s)=>{
+    const {data:listener} = sb.auth.onAuthStateChange((event,s)=>{
       setSession(s);
       setUser(s?.user||null);
+      if(event==="USER_UPDATED"){
+        setNeedsPassword(false);
+      }
     });
     return ()=>listener.subscription.unsubscribe();
   },[]);
@@ -4136,6 +4185,7 @@ export default function App(){
 
   if(loadingAuth) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center"}}><Spinner/></div>;
   if(!session) return <AuthScreen onAuth={()=>window.location.reload()}/>;
+  if(needsPassword) return <SetPasswordScreen onDone={()=>{ setNeedsPassword(false); window.location.reload(); }}/>;
   if(!orgId) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}>
     <Spinner/>
     <div>Cargando tu organización...</div>
