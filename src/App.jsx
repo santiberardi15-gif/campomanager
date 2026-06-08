@@ -3715,13 +3715,59 @@ function ColaboradoresPage({data,orgId,toast,reload,miRol,miMiembroId}){
 }
 
 // ── CONFIG ──────────────────────────────────────────────────────────────────
-function ConfigPage({data,orgId,toast,reload,dolar,setDolar,onLogout,user,sinGastos}){
+function ConfigPage({data,orgId,toast,reload,dolar,setDolar,onLogout,user,sinGastos,logoUrl,setLogoUrl}){
   const [d,setD]=useState(dolar);
+  const [subiendoLogo,setSubiendoLogo]=useState(false);
+  const logoRef=useRef();
   const guardarDolar = async ()=>{
     await sb.from("config").upsert({org_id:orgId,dolar_oficial:Number(d),ultima_actualizacion:new Date().toISOString()},{onConflict:"org_id"});
     setDolar(Number(d));
     toast("Dólar actualizado");
     reload();
+  };
+
+  const subirLogo = async (e)=>{
+    const file = e.target.files?.[0];
+    if(!file) return;
+    if(!file.type.startsWith("image/")){toast("Tiene que ser una imagen","error");return;}
+    setSubiendoLogo(true);
+    try{
+      // Redimensionar a máx 256px y convertir a base64 (PNG)
+      const dataUrl = await new Promise((resolve,reject)=>{
+        const reader = new FileReader();
+        reader.onload = ()=>{
+          const img = new Image();
+          img.onload = ()=>{
+            const max = 256;
+            let {width,height} = img;
+            if(width>height && width>max){ height=Math.round(height*max/width); width=max; }
+            else if(height>max){ width=Math.round(width*max/height); height=max; }
+            const canvas = document.createElement("canvas");
+            canvas.width=width; canvas.height=height;
+            canvas.getContext("2d").drawImage(img,0,0,width,height);
+            resolve(canvas.toDataURL("image/png"));
+          };
+          img.onerror = reject;
+          img.src = reader.result;
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
+      const {error} = await sb.from("config").upsert({org_id:orgId,logo:dataUrl,ultima_actualizacion:new Date().toISOString()},{onConflict:"org_id"});
+      if(error) throw error;
+      setLogoUrl(dataUrl);
+      toast("Logo actualizado");
+    }catch(err){
+      toast("Error al subir el logo: "+(err.message||""),"error");
+    }
+    setSubiendoLogo(false);
+    if(logoRef.current) logoRef.current.value="";
+  };
+
+  const quitarLogo = async ()=>{
+    await sb.from("config").upsert({org_id:orgId,logo:null,ultima_actualizacion:new Date().toISOString()},{onConflict:"org_id"});
+    setLogoUrl(LOGO_URL);
+    toast("Logo restablecido");
   };
 
   return(
@@ -3731,6 +3777,21 @@ function ConfigPage({data,orgId,toast,reload,dolar,setDolar,onLogout,user,sinGas
         <div style={{fontSize:14,color:"#6b7280",marginBottom:4}}>Email: <b style={{color:"#111"}}>{user?.email}</b></div>
         <div style={{fontSize:14,color:"#6b7280",marginBottom:16}}>ID de organización: <code style={{background:"#f3f4f6",padding:"2px 6px",borderRadius:4,fontSize:12}}>{orgId}</code></div>
         <Btn variant="danger" onClick={onLogout}><I.logout/> Cerrar sesión</Btn>
+      </div>
+
+      <div style={{background:"#fff",borderRadius:14,padding:24,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginBottom:16}}>
+        <div style={{fontWeight:700,fontSize:16,marginBottom:16}}>Logo del campo</div>
+        <div style={{fontSize:13,color:"#6b7280",marginBottom:16}}>Aparece en el menú de la app. Subí una imagen cuadrada (PNG o JPG).</div>
+        <div style={{display:"flex",alignItems:"center",gap:16,flexWrap:"wrap"}}>
+          <div style={{width:72,height:72,borderRadius:14,background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden",border:"1px solid #e5e7eb"}}>
+            <img src={logoUrl} alt="Logo" style={{width:"100%",height:"100%",objectFit:"contain"}}/>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <input ref={logoRef} type="file" accept="image/*" onChange={subirLogo} style={{display:"none"}}/>
+            <Btn variant="primary" onClick={()=>logoRef.current?.click()} disabled={subiendoLogo}>{subiendoLogo?"Subiendo...":"Cambiar logo"}</Btn>
+            <Btn variant="secondary" onClick={quitarLogo}>Restablecer</Btn>
+          </div>
+        </div>
       </div>
 
       {!sinGastos&&<div style={{background:"#fff",borderRadius:14,padding:24,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",marginBottom:16}}>
@@ -4141,6 +4202,7 @@ export default function App(){
   const [needsPassword,setNeedsPassword]=useState(false);
   const [data,setData]=useState({campos:[],stock:[],animales:[],campanas:[],maquinaria:[],lluvias:[],finanzas:[],ordenes:[],documentos:[],colaboradores:[],miembros:[],notificaciones:[],movimientos:[]});
   const [dolar,setDolar]=useState(1420);
+  const [logoUrl,setLogoUrl]=useState(LOGO_URL);
   const [page,setPage]=useState("resumen");
   const [sidebarOpen,setSidebarOpen]=useState(true);
   const [toastMsg,setToastMsg]=useState(null);
@@ -4189,7 +4251,10 @@ export default function App(){
     tables.forEach((t,i)=>{newData[t]=results[i].data||[];});
     setData(newData);
     const {data:cfg} = await sb.from("config").select("*").eq("org_id",orgId).maybeSingle();
-    if(cfg) setDolar(Number(cfg.dolar_oficial)||1420);
+    if(cfg){
+      setDolar(Number(cfg.dolar_oficial)||1420);
+      setLogoUrl(cfg.logo || LOGO_URL);
+    }
 
     // Auto-complete orders past deadline
     const today = todayISO();
@@ -4282,7 +4347,7 @@ export default function App(){
     documentos:<DocumentosPage {...props}/>,
     historial:<HistorialPage {...props}/>,
     colaboradores:<ColaboradoresPage {...props}/>,
-    config:<ConfigPage {...props} setDolar={setDolar} onLogout={onLogout} user={user}/>,
+    config:<ConfigPage {...props} setDolar={setDolar} onLogout={onLogout} user={user} logoUrl={logoUrl} setLogoUrl={setLogoUrl}/>,
   };
 
   return(
@@ -4299,7 +4364,7 @@ export default function App(){
 
       <div style={{width:sidebarOpen?232:58,minWidth:sidebarOpen?232:58,background:"#fff",borderRight:"1px solid #e5e7eb",display:"flex",flexDirection:"column",transition:"width .25s",overflow:"hidden",boxShadow:"2px 0 8px rgba(0,0,0,0.04)",zIndex:10}}>
         <div style={{padding:"14px 12px",borderBottom:"1px solid #f3f4f6",display:"flex",alignItems:"center",gap:10}}>
-          <div style={{width:36,height:36,borderRadius:10,background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={LOGO_URL} alt="María Amelia" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
+          <div style={{width:36,height:36,borderRadius:10,background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={logoUrl} alt="Logo" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
           {sidebarOpen&&<div><div style={{fontSize:10,color:"#9ca3af",lineHeight:1}}>Control operativo</div><div style={{fontWeight:800,fontSize:14}}>Campo Manager</div></div>}
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"6px 0"}}>
