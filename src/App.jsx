@@ -330,8 +330,9 @@ function SetPasswordScreen({onDone}){
       // Actualizar contraseña
       const {error:passErr} = await sb.auth.updateUser({password});
       if(passErr) throw passErr;
-      // Unirse al campo automáticamente
-      const {error:joinErr} = await sb.rpc("join_org",{invite_org_id:"75ec51bc-1569-495b-9df4-666bc4dc84ad",nombre_user:nombre,email_user:user.email});
+      // Unirse al campo — leer org_id del metadata de la invitación
+      const orgId = user.user_metadata?.org_id || "75ec51bc-1569-495b-9df4-666bc4dc84ad";
+      const {error:joinErr} = await sb.rpc("join_org",{invite_org_id:orgId,nombre_user:nombre,email_user:user.email});
       if(joinErr) throw joinErr;
       onDone();
     } catch(e){
