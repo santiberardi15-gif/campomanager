@@ -2536,36 +2536,69 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
   const EMPTY={campo:"",fecha:todayISO(),mm:"",obs:""};
   const {editItem,setEditItem,confirm,setConfirm}=useEdit(EMPTY,modalReq,clearModal);
   const [campoFil,setCampoFil]=useState("Todos los campos");
+  const [vista,setVista]=useState("anual"); // "anual" | "mensual"
+  const now=new Date();
+  const [mesSel,setMesSel]=useState(now.getMonth());
+  const [anioSel,setAnioSel]=useState(now.getFullYear());
 
   const filtered=data.lluvias
     .filter(l=>campoFil==="Todos los campos"||l.campo===campoFil)
     .sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
 
-  const m=new Date().getMonth();
-  const y=new Date().getFullYear();
+  const m=now.getMonth();
+  const y=now.getFullYear();
+  const meses2=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
+  const esTodos = campoFil==="Todos los campos";
 
-  // 🆕 Acumulado anual: en "Todos los campos" muestra el PROMEDIO entre los campos
-  //    que tienen registros este año; con un campo filtrado, el acumulado de ese campo.
-  const lluviasAnio = filtered.filter(l=>l.fecha && new Date(l.fecha).getFullYear()===y);
+  // ── VISTA ANUAL ──
+  const lluviasAnio = filtered.filter(l=>l.fecha && new Date(l.fecha).getFullYear()===anioSel);
   const acumAnioTotal = lluviasAnio.reduce((s,l)=>s+Number(l.mm||0),0);
   const nCampos = [...new Set(lluviasAnio.map(l=>l.campo))].filter(Boolean).length;
-  const esTodos = campoFil==="Todos los campos";
-  const acum = esTodos
-    ? (nCampos>0 ? Math.round(acumAnioTotal/nCampos) : 0)
-    : acumAnioTotal;
+  const acumAnual = esTodos ? (nCampos>0 ? Math.round(acumAnioTotal/nCampos) : 0) : acumAnioTotal;
+  const lluviaMAnual = meses2.map((mes,idx)=>({
+    mes,
+    mm: esTodos
+      ? (()=>{
+          const campos = [...new Set(data.lluvias.map(l=>l.campo))].filter(Boolean);
+          const totales = campos.map(c=>
+            data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===idx&&new Date(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)
+          ).filter(t=>t>0);
+          return totales.length>0 ? Math.round(totales.reduce((a,b)=>a+b,0)/totales.length) : 0;
+        })()
+      : filtered.filter(l=>l.fecha&&new Date(l.fecha).getMonth()===idx&&new Date(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)
+  }));
+
+  // ── VISTA MENSUAL ──
+  const diasDelMes = new Date(anioSel, mesSel+1, 0).getDate();
+  const lluviasMes = filtered.filter(l=>l.fecha&&new Date(l.fecha).getMonth()===mesSel&&new Date(l.fecha).getFullYear()===anioSel);
+  const acumMes = esTodos
+    ? (()=>{
+        const campos=[...new Set(data.lluvias.map(l=>l.campo))].filter(Boolean);
+        const totales=campos.map(c=>data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===mesSel&&new Date(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)).filter(t=>t>0);
+        return totales.length>0?Math.round(totales.reduce((a,b)=>a+b,0)/totales.length):0;
+      })()
+    : lluviasMes.reduce((s,l)=>s+Number(l.mm||0),0);
+  const lluviaMDias = Array.from({length:diasDelMes},(_,i)=>{
+    const dia=i+1;
+    const fecha=`${anioSel}-${String(mesSel+1).padStart(2,"0")}-${String(dia).padStart(2,"0")}`;
+    return {
+      dia:`${dia}`,
+      mm: esTodos
+        ? (()=>{
+            const campos=[...new Set(data.lluvias.map(l=>l.campo))].filter(Boolean);
+            const totales=campos.map(c=>data.lluvias.filter(l=>l.campo===c&&l.fecha===fecha).reduce((s,l)=>s+Number(l.mm||0),0)).filter(t=>t>0);
+            return totales.length>0?Math.round(totales.reduce((a,b)=>a+b,0)/totales.length):0;
+          })()
+        : filtered.filter(l=>l.fecha===fecha).reduce((s,l)=>s+Number(l.mm||0),0)
+    };
+  });
 
   const mayor=filtered.length?Math.max(...filtered.map(l=>Number(l.mm||0))):0;
-  const esteMes = filtered.filter(l=>{
-    if(!l.fecha) return false;
-    const d=new Date(l.fecha);
-    return d.getMonth()===m && d.getFullYear()===y;
-  }).reduce((s,l)=>s+Number(l.mm||0),0);
+  const esteMes=filtered.filter(l=>{if(!l.fecha)return false;const d=new Date(l.fecha);return d.getMonth()===m&&d.getFullYear()===y;}).reduce((s,l)=>s+Number(l.mm||0),0);
 
-  const meses2=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
-  const lluviaM = meses2.map((mes,idx)=>({
-    mes,
-    mm:filtered.filter(l=>{if(!l.fecha)return false;const d=new Date(l.fecha);return d.getMonth()===idx&&d.getFullYear()===y;}).reduce((s,l)=>s+Number(l.mm||0),0)
-  }));
+  // años disponibles
+  const anios=[...new Set(data.lluvias.map(l=>l.fecha&&new Date(l.fecha).getFullYear()).filter(Boolean))].sort((a,b)=>b-a);
+  if(!anios.includes(y)) anios.unshift(y);
 
   const save = async ()=>{
     if(!editItem.campo||!editItem.mm){toast("Faltan campos","error");return;}
@@ -2590,25 +2623,44 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
 
   return(
     <div>
-      <div style={{marginBottom:14}}>
+      {/* Filtros */}
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
         <select value={campoFil} onChange={e=>setCampoFil(e.target.value)} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
           <option>Todos los campos</option>
           {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
         </select>
+        <div style={{display:"flex",borderRadius:8,overflow:"hidden",border:"1.5px solid #e5e7eb"}}>
+          <button onClick={()=>setVista("anual")} style={{padding:"9px 18px",fontSize:13,fontWeight:600,border:"none",cursor:"pointer",background:vista==="anual"?"#16a34a":"#fff",color:vista==="anual"?"#fff":"#6b7280"}}>Anual</button>
+          <button onClick={()=>setVista("mensual")} style={{padding:"9px 18px",fontSize:13,fontWeight:600,border:"none",cursor:"pointer",background:vista==="mensual"?"#16a34a":"#fff",color:vista==="mensual"?"#fff":"#6b7280"}}>Mensual</button>
+        </div>
+        {vista==="mensual"&&(
+          <select value={mesSel} onChange={e=>setMesSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+            {meses2.map((mes,i)=><option key={i} value={i}>{mes}</option>)}
+          </select>
+        )}
+        <select value={anioSel} onChange={e=>setAnioSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+          {anios.map(a=><option key={a} value={a}>{a}</option>)}
+        </select>
       </div>
 
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
-        <KPI label={esTodos?"Prom. anual (campos)":"Acumulado anual"} value={`${acum} mm`} sub={esTodos&&nCampos>0?`promedio de ${nCampos} campo(s)`:undefined} icon={<I.rain/>}/>
+        {vista==="anual"
+          ? <KPI label={esTodos?"Prom. anual (campos)":"Acumulado anual"} value={`${acumAnual} mm`} sub={esTodos&&nCampos>0?`promedio de ${nCampos} campo(s)`:undefined} icon={<I.rain/>}/>
+          : <KPI label={esTodos?`Prom. ${meses2[mesSel]} (campos)`:`Acumulado ${meses2[mesSel]}`} value={`${acumMes} mm`} icon={<I.rain/>}/>
+        }
         <KPI label="Este mes" value={`${esteMes} mm`} icon={<I.cloud/>}/>
         <KPI label="Mayor evento" value={`${mayor} mm`} icon={<I.warn/>}/>
       </div>
 
       <div style={{background:"#fff",borderRadius:14,padding:20,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
-        <div style={{fontWeight:700,marginBottom:12}}>Precipitaciones mensuales {y}</div>
+        {vista==="anual"
+          ? <div style={{fontWeight:700,marginBottom:12}}>Precipitaciones mensuales {anioSel} {esTodos?"— promedio campos":""}</div>
+          : <div style={{fontWeight:700,marginBottom:12}}>Precipitaciones diarias — {meses2[mesSel]} {anioSel} {esTodos?"— promedio campos":""}</div>
+        }
         <ResponsiveContainer width="100%" height={200}>
-          <BarChart data={lluviaM}>
+          <BarChart data={vista==="anual"?lluviaMAnual:lluviaMDias}>
             <CartesianGrid strokeDasharray="3 3" stroke="#f3f4f6"/>
-            <XAxis dataKey="mes" tick={{fontSize:11}}/>
+            <XAxis dataKey={vista==="anual"?"mes":"dia"} tick={{fontSize:11}}/>
             <YAxis tick={{fontSize:10}}/>
             <Tooltip formatter={v=>v+" mm"}/>
             <Bar dataKey="mm" fill="#3b82f6" radius={[4,4,0,0]}/>
