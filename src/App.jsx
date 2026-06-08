@@ -313,21 +313,38 @@ const Spinner = ()=>(
 // AUTH SCREEN
 // ════════════════════════════════════════════════════════════════════════════
 function SetPasswordScreen({onDone}){
+  const [step,setStep]=useState("password"); // "password" | "org"
   const [password,setPassword]=useState("");
   const [confirm,setConfirm]=useState("");
+  const [nombre,setNombre]=useState("");
+  const [orgInvite,setOrgInvite]=useState("");
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
 
-  const submit = async ()=>{
+  const submitPassword = async ()=>{
     if(password.length<6) return setError("La contraseña debe tener al menos 6 caracteres");
     if(password!==confirm) return setError("Las contraseñas no coinciden");
+    if(!nombre.trim()) return setError("Ingresá tu nombre");
     setError(""); setLoading(true);
     try{
       const {error} = await sb.auth.updateUser({password});
       if(error) throw error;
-      onDone();
+      setStep("org");
     } catch(e){
       setError(e.message||"Error desconocido");
+    }
+    setLoading(false);
+  };
+
+  const submitOrg = async ()=>{
+    setError(""); setLoading(true);
+    try{
+      const {data:{user}} = await sb.auth.getUser();
+      const {error} = await sb.rpc("join_org",{invite_org_id:"75ec51bc-1569-495b-9df4-666bc4dc84ad",nombre_user:nombre,email_user:user.email});
+      if(error) throw error;
+      onDone();
+    } catch(e){
+      setError(e.message||"Error al unirse al campo");
     }
     setLoading(false);
   };
@@ -338,14 +355,22 @@ function SetPasswordScreen({onDone}){
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{width:72,height:72,borderRadius:16,background:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:12,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={LOGO_URL} alt="María Amelia" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
           <h1 style={{margin:0,fontSize:24,fontWeight:800}}>Campo Manager</h1>
-          <p style={{color:"#6b7280",marginTop:6,fontSize:14}}>Creá tu contraseña para continuar</p>
+          <p style={{color:"#6b7280",marginTop:6,fontSize:14}}>{step==="password"?"Paso 1 de 2 — Creá tu contraseña":"Paso 2 de 2 — Ingresá el código del campo"}</p>
         </div>
-        <Inp label="Nueva contraseña" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/>
-        <Inp label="Repetir contraseña" type="password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="••••••••"/>
-        {error&&<div style={{background:"#fef2f2",color:"#dc2626",padding:"10px 12px",borderRadius:8,fontSize:13,marginBottom:13}}>{error}</div>}
-        <Btn variant="primary" full onClick={submit} disabled={loading}>
-          {loading?"Guardando...":"Crear contraseña"}
-        </Btn>
+
+        {step==="password"&&(<>
+          <Inp label="Tu nombre" value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Ej: Juan García"/>
+          <Inp label="Nueva contraseña" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/>
+          <Inp label="Repetir contraseña" type="password" value={confirm} onChange={e=>setConfirm(e.target.value)} placeholder="••••••••"/>
+          {error&&<div style={{background:"#fef2f2",color:"#dc2626",padding:"10px 12px",borderRadius:8,fontSize:13,marginBottom:13}}>{error}</div>}
+          <Btn variant="primary" full onClick={submitPassword} disabled={loading}>{loading?"Guardando...":"Continuar"}</Btn>
+        </>)}
+
+        {step==="org"&&(<>
+          <p style={{color:"#6b7280",fontSize:14,marginBottom:16}}>Todo listo. Hacé click para entrar.</p>
+          {error&&<div style={{background:"#fef2f2",color:"#dc2626",padding:"10px 12px",borderRadius:8,fontSize:13,marginBottom:13}}>{error}</div>}
+          <Btn variant="primary" full onClick={submitOrg} disabled={loading}>{loading?"Uniéndome...":"Entrar al campo"}</Btn>
+        </>)}
       </div>
     </div>
   );
