@@ -313,49 +313,17 @@ const Spinner = ()=>(
 // AUTH SCREEN
 // ════════════════════════════════════════════════════════════════════════════
 function AuthScreen({onAuth}){
-  const [mode,setMode]=useState("login");
   const [email,setEmail]=useState("");
   const [password,setPassword]=useState("");
-  const [nombre,setNombre]=useState("");
-  const [orgNombre,setOrgNombre]=useState("");
-  const [orgInvite,setOrgInvite]=useState("");
-  const [signupMode,setSignupMode]=useState("nueva");
   const [loading,setLoading]=useState(false);
   const [error,setError]=useState("");
 
   const submit = async ()=>{
     setError(""); setLoading(true);
     try{
-      if(mode==="login"){
-        const {error} = await sb.auth.signInWithPassword({email,password});
-        if(error) throw error;
-        onAuth();
-      } else {
-        if(!nombre.trim()) throw new Error("Ingresá tu nombre");
-        // SIGNUP
-        const {data:authData,error:authError} = await sb.auth.signUp({email,password});
-        if(authError) throw authError;
-        if(!authData.user) throw new Error("No se pudo crear el usuario");
-
-        // Force login to ensure session is set
-        const {error:loginErr} = await sb.auth.signInWithPassword({email,password});
-        if(loginErr) throw new Error("No se pudo iniciar sesión: " + loginErr.message + ". Asegurate de que 'Confirm email' esté desactivado en Supabase.");
-
-        // Wait for session to propagate
-        await new Promise(r=>setTimeout(r,300));
-
-        if(signupMode==="nueva"){
-          const {data:newOrgId,error:rpcErr} = await sb.rpc("create_org_and_join",{org_nombre:orgNombre||"Mi Campo",nombre_user:nombre,email_user:email});
-          if(rpcErr) throw new Error("Error creando organización: " + rpcErr.message);
-          if(!newOrgId) throw new Error("No se pudo crear la organización");
-        } else {
-          if(!orgInvite || orgInvite.length<10) throw new Error("Código de invitación inválido");
-          const {error:joinErr} = await sb.rpc("join_org",{invite_org_id:orgInvite,nombre_user:nombre,email_user:email});
-          if(joinErr) throw new Error("Error al unirse: " + joinErr.message);
-        }
-
-        onAuth();
-      }
+      const {error} = await sb.auth.signInWithPassword({email,password});
+      if(error) throw error;
+      onAuth();
     } catch(e){
       setError(e.message||"Error desconocido");
     }
@@ -368,38 +336,17 @@ function AuthScreen({onAuth}){
         <div style={{textAlign:"center",marginBottom:28}}>
           <div style={{width:72,height:72,borderRadius:16,background:"#fff",display:"inline-flex",alignItems:"center",justifyContent:"center",marginBottom:12,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={LOGO_URL} alt="María Amelia" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
           <h1 style={{margin:0,fontSize:24,fontWeight:800}}>Campo Manager</h1>
-          <p style={{color:"#6b7280",marginTop:6,fontSize:14}}>{mode==="login"?"Iniciá sesión":"Creá tu cuenta"}</p>
+          <p style={{color:"#6b7280",marginTop:6,fontSize:14}}>Iniciá sesión</p>
         </div>
 
         <Inp label="Email" type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="tu@email.com"/>
         <Inp label="Contraseña" type="password" value={password} onChange={e=>setPassword(e.target.value)} placeholder="••••••••"/>
 
-        {mode==="signup"&&(
-          <>
-            <Inp label="Tu nombre" value={nombre} onChange={e=>setNombre(e.target.value)} placeholder="Ej: Santiago Berardi"/>
-            <div style={{display:"flex",gap:8,marginBottom:13}}>
-              <button onClick={()=>setSignupMode("nueva")} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid",borderColor:signupMode==="nueva"?"#16a34a":"#e5e7eb",background:signupMode==="nueva"?"#f0fdf4":"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:signupMode==="nueva"?"#16a34a":"#6b7280"}}>Nuevo campo</button>
-              <button onClick={()=>setSignupMode("unirse")} style={{flex:1,padding:"8px",borderRadius:8,border:"1.5px solid",borderColor:signupMode==="unirse"?"#16a34a":"#e5e7eb",background:signupMode==="unirse"?"#f0fdf4":"#fff",cursor:"pointer",fontSize:13,fontWeight:600,color:signupMode==="unirse"?"#16a34a":"#6b7280"}}>Unirme</button>
-            </div>
-            {signupMode==="nueva"
-              ? <Inp label="Nombre del establecimiento" value={orgNombre} onChange={e=>setOrgNombre(e.target.value)} placeholder="Ej: La Esperanza"/>
-              : <Inp label="Código de invitación" value={orgInvite} onChange={e=>setOrgInvite(e.target.value)} placeholder="Pegá el código que te pasaron"/>
-            }
-          </>
-        )}
-
         {error&&<div style={{background:"#fef2f2",color:"#dc2626",padding:"10px 12px",borderRadius:8,fontSize:13,marginBottom:13}}>{error}</div>}
 
         <Btn variant="primary" full onClick={submit} disabled={loading}>
-          {loading?"Procesando...":mode==="login"?"Entrar":"Crear cuenta"}
+          {loading?"Procesando...":"Entrar"}
         </Btn>
-
-        <div style={{textAlign:"center",marginTop:16,fontSize:13,color:"#6b7280"}}>
-          {mode==="login"?"¿No tenés cuenta?":"¿Ya tenés cuenta?"}{" "}
-          <button onClick={()=>{setMode(mode==="login"?"signup":"login");setError("");}} style={{background:"none",border:"none",color:"#16a34a",fontWeight:700,cursor:"pointer",textDecoration:"underline"}}>
-            {mode==="login"?"Crear una":"Iniciar sesión"}
-          </button>
-        </div>
       </div>
     </div>
   );
