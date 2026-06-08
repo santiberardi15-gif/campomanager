@@ -2550,13 +2550,14 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
   const meses2=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
   const esTodos = campoFil==="Todos los campos";
 
+  const todosCampos = [...new Set(data.campos.map(c=>c.nombre))].filter(Boolean);
+  const nTotalCampos = todosCampos.length || 1;
+
   // ── VISTA ANUAL ──
   const lluviasAnio = filtered.filter(l=>l.fecha && new Date(l.fecha).getFullYear()===anioSel);
   const acumAnioTotal = lluviasAnio.reduce((s,l)=>s+Number(l.mm||0),0);
   const nCampos = [...new Set(lluviasAnio.map(l=>l.campo))].filter(Boolean).length;
   const acumAnual = esTodos ? Math.round(acumAnioTotal/nTotalCampos) : acumAnioTotal;
-  const todosCampos = [...new Set(data.campos.map(c=>c.nombre))].filter(Boolean);
-  const nTotalCampos = todosCampos.length || 1;
 
   const lluviaMAnual = meses2.map((mes,idx)=>({
     mes,
