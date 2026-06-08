@@ -2554,17 +2554,17 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
   const lluviasAnio = filtered.filter(l=>l.fecha && new Date(l.fecha).getFullYear()===anioSel);
   const acumAnioTotal = lluviasAnio.reduce((s,l)=>s+Number(l.mm||0),0);
   const nCampos = [...new Set(lluviasAnio.map(l=>l.campo))].filter(Boolean).length;
-  const acumAnual = esTodos ? (nCampos>0 ? Math.round(acumAnioTotal/nCampos) : 0) : acumAnioTotal;
+  const acumAnual = esTodos ? Math.round(acumAnioTotal/nTotalCampos) : acumAnioTotal;
+  const todosCampos = [...new Set(data.campos.map(c=>c.nombre))].filter(Boolean);
+  const nTotalCampos = todosCampos.length || 1;
+
   const lluviaMAnual = meses2.map((mes,idx)=>({
     mes,
     mm: esTodos
-      ? (()=>{
-          const campos = [...new Set(data.lluvias.map(l=>l.campo))].filter(Boolean);
-          const totales = campos.map(c=>
-            data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===idx&&new Date(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)
-          ).filter(t=>t>0);
-          return totales.length>0 ? Math.round(totales.reduce((a,b)=>a+b,0)/totales.length) : 0;
-        })()
+      ? Math.round(
+          todosCampos.reduce((s,c)=>s+data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===idx&&new Date(l.fecha).getFullYear()===anioSel).reduce((ss,l)=>ss+Number(l.mm||0),0),0)
+          / nTotalCampos
+        )
       : filtered.filter(l=>l.fecha&&new Date(l.fecha).getMonth()===idx&&new Date(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)
   }));
 
@@ -2572,11 +2572,7 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
   const diasDelMes = new Date(anioSel, mesSel+1, 0).getDate();
   const lluviasMes = filtered.filter(l=>l.fecha&&new Date(l.fecha).getMonth()===mesSel&&new Date(l.fecha).getFullYear()===anioSel);
   const acumMes = esTodos
-    ? (()=>{
-        const campos=[...new Set(data.lluvias.map(l=>l.campo))].filter(Boolean);
-        const totales=campos.map(c=>data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===mesSel&&new Date(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)).filter(t=>t>0);
-        return totales.length>0?Math.round(totales.reduce((a,b)=>a+b,0)/totales.length):0;
-      })()
+    ? Math.round(todosCampos.reduce((s,c)=>s+data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===mesSel&&new Date(l.fecha).getFullYear()===anioSel).reduce((ss,l)=>ss+Number(l.mm||0),0),0) / nTotalCampos)
     : lluviasMes.reduce((s,l)=>s+Number(l.mm||0),0);
   const lluviaMDias = Array.from({length:diasDelMes},(_,i)=>{
     const dia=i+1;
@@ -2584,11 +2580,7 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
     return {
       dia:`${dia}`,
       mm: esTodos
-        ? (()=>{
-            const campos=[...new Set(data.lluvias.map(l=>l.campo))].filter(Boolean);
-            const totales=campos.map(c=>data.lluvias.filter(l=>l.campo===c&&l.fecha===fecha).reduce((s,l)=>s+Number(l.mm||0),0)).filter(t=>t>0);
-            return totales.length>0?Math.round(totales.reduce((a,b)=>a+b,0)/totales.length):0;
-          })()
+        ? Math.round(todosCampos.reduce((s,c)=>s+data.lluvias.filter(l=>l.campo===c&&l.fecha===fecha).reduce((ss,l)=>ss+Number(l.mm||0),0),0) / nTotalCampos)
         : filtered.filter(l=>l.fecha===fecha).reduce((s,l)=>s+Number(l.mm||0),0)
     };
   });
