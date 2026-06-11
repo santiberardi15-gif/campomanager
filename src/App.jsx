@@ -28,6 +28,47 @@ const SENTINEL_INSTANCE_ID = import.meta.env.VITE_SENTINEL_INSTANCE_ID;
 const SENTINEL_WMS_URL = SENTINEL_INSTANCE_ID
   ? `https://sh.dataspace.copernicus.eu/ogc/wms/${SENTINEL_INSTANCE_ID}`
   : null;
+const SENTINEL_WFS_URL = SENTINEL_INSTANCE_ID
+  ? `https://sh.dataspace.copernicus.eu/ogc/wfs/${SENTINEL_INSTANCE_ID}`
+  : null;
+
+// Formatea "2026-05-25" → "25 de mayo de 2026"
+function fmtFechaSat(iso) {
+  try {
+    return new Date(iso + "T12:00:00").toLocaleDateString("es-AR", {
+      day: "numeric", month: "long", year: "numeric",
+    });
+  } catch { return iso; }
+}
+
+// 🛰️ Consulta al WFS qué imágenes Sentinel-2 hay para un área (bbox) hasta una
+// fecha, y devuelve la más reciente con menos nubes. Devuelve { date, cloud }
+// o null si no hay ninguna en la ventana.
+async function buscarImagenSentinel(bbox, hasta, dias = 90) {
+  if (!SENTINEL_WFS_URL) return null;
+  const desdeDate = new Date(hasta + "T00:00:00");
+  desdeDate.setDate(desdeDate.getDate() - dias);
+  const desde = desdeDate.toISOString().slice(0, 10);
+  // bbox de Leaflet: [[south, west], [north, east]] → WFS quiere "south,west,north,east"
+  const [[s, w], [n, e]] = bbox;
+  const url = `${SENTINEL_WFS_URL}?SERVICE=WFS&REQUEST=GetFeature&VERSION=2.0.0` +
+    `&TYPENAMES=DSS2&OUTPUTFORMAT=application/json&SRSNAME=EPSG:4326` +
+    `&BBOX=${s},${w},${n},${e}&TIME=${desde}/${hasta}&MAXCC=80&MAXFEATURES=50`;
+  try {
+    const res = await fetch(url);
+    const data = await res.json();
+    const feats = (data.features || [])
+      .map(f => ({ date: f.properties.date, cloud: f.properties.cloudCoverPercentage ?? 100 }))
+      .filter(f => f.date);
+    if (!feats.length) return null;
+    // Ordenar por fecha desc y preferir la más reciente con nubes razonables.
+    feats.sort((a, b) => b.date.localeCompare(a.date));
+    const limpia = feats.find(f => f.cloud <= 40);
+    return limpia || feats[0]; // si todas están nubladas, devolver igual la más nueva
+  } catch {
+    return null;
+  }
+}
 // IDs de las capas tal como están en la configuración de Copernicus
 // (plantilla "Simple Sentinel-2 L2A")
 const SENTINEL_CAPAS = [
@@ -840,9 +881,11 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
   const [mapMsg, setMapMsg] = useState(null);
   const [mapReady, setMapReady] = useState(false); // 🆕 dispara el re-render cuando leaflet termina de cargar
 
-  // 🛰️ Capa satelital Sentinel-2: "base" (Esri) | "TRUE-COLOR" | "NDVI"
+  // 🛰️ Capa satelital Sentinel-2: "base" (Esri) | "TRUE_COLOR" | "VEGETATION_INDEX"
   const [capaSat, setCapaSat] = useState("base");
   const [fechaSat, setFechaSat] = useState(() => new Date().toISOString().slice(0, 10));
+  const [satInfo, setSatInfo] = useState(null); // { date, cloud } de la imagen mostrada
+  const [satCargando, setSatCargando] = useState(false);
 
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -1101,32 +1144,56 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
     if (!pack || !map) return;
     const { L } = pack;
 
-    // Sacar la capa anterior si había
-    if (sentinelLayerRef.current) {
-      map.removeLayer(sentinelLayerRef.current);
-      sentinelLayerRef.current = null;
+    const quitarCapa = () => {
+      if (sentinelLayerRef.current) {
+        map.removeLayer(sentinelLayerRef.current);
+        sentinelLayerRef.current = null;
+      }
+    };
+
+    quitarCapa();
+    if (capaSat === "base" || !SENTINEL_WMS_URL) {
+      setSatInfo(null);
+      return;
     }
-    if (capaSat === "base" || !SENTINEL_WMS_URL) return;
 
-    // Ventana de 35 días hacia atrás: el satélite pasa cada ~5 días pero en
-    // épocas nubladas pueden pasar semanas sin una imagen limpia. El WMS
-    // siempre muestra la pasada más reciente disponible dentro de la ventana.
-    const desdeDate = new Date(fechaSat + "T00:00:00");
-    desdeDate.setDate(desdeDate.getDate() - 35);
-    const desde = desdeDate.toISOString().slice(0, 10);
+    let cancelado = false;
+    setSatCargando(true);
+    setSatInfo(null);
 
-    const layer = L.tileLayer.wms(SENTINEL_WMS_URL, {
-      layers: capaSat,
-      format: "image/png",
-      transparent: true,
-      version: "1.3.0",
-      time: `${desde}/${fechaSat}`,
-      maxcc: 60, // descarta pasadas con más de 60% de nubes
-      attribution: "Sentinel-2 &copy; Copernicus",
-      maxZoom: 19,
-    });
-    layer.addTo(map);
-    sentinelLayerRef.current = layer;
+    (async () => {
+      const bounds = map.getBounds();
+      const bbox = [
+        [bounds.getSouth(), bounds.getWest()],
+        [bounds.getNorth(), bounds.getEast()],
+      ];
+      // Buscar la imagen real más reciente (con fecha de captura) hasta la fecha elegida.
+      const img = await buscarImagenSentinel(bbox, fechaSat, 90);
+      if (cancelado) return;
+      setSatCargando(false);
+
+      if (!img) {
+        setSatInfo({ ninguna: true });
+        return;
+      }
+      setSatInfo(img);
+
+      // Pedir el WMS para ESE día puntual (un solo día = una sola pasada).
+      quitarCapa();
+      const layer = L.tileLayer.wms(SENTINEL_WMS_URL, {
+        layers: capaSat,
+        format: "image/png",
+        transparent: true,
+        version: "1.3.0",
+        time: img.date, // fecha exacta de captura
+        attribution: "Sentinel-2 &copy; Copernicus",
+        maxZoom: 19,
+      });
+      layer.addTo(map);
+      sentinelLayerRef.current = layer;
+    })();
+
+    return () => { cancelado = true; };
   }, [capaSat, fechaSat, mapReady]);
 
   // ── Buscar localidad ───────────────────────────────────────────────────────
@@ -1238,11 +1305,29 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
               <span>Vegetación vigorosa</span>
             </div>
           )}
-          {capaSat !== "base" && (
-            <span style={{ fontSize: 11, color: "#9ca3af" }}>
-              Sentinel-2 · muestra la última imagen limpia hasta la fecha elegida
+        </div>
+      )}
+
+      {/* 🛰️ Fecha real de la imagen satelital mostrada */}
+      {SENTINEL_WMS_URL && capaSat !== "base" && (
+        <div style={{ marginBottom: 10, fontSize: 12 }}>
+          {satCargando ? (
+            <span style={{ color: "#6b7280" }}>🛰️ Buscando la imagen más reciente…</span>
+          ) : satInfo?.ninguna ? (
+            <span style={{ color: "#b45309", background: "#fffbeb", border: "1px solid #fde68a", borderRadius: 8, padding: "4px 10px", display: "inline-block" }}>
+              ⚠️ No hay imágenes satelitales para esta zona en los últimos 90 días. Probá alejar el mapa o elegir otra fecha.
             </span>
-          )}
+          ) : satInfo?.date ? (
+            <span style={{ color: "#15803d", background: "#f0fdf4", border: "1px solid #bbf7d0", borderRadius: 8, padding: "4px 10px", display: "inline-block" }}>
+              📅 Imagen captada el <b>{fmtFechaSat(satInfo.date)}</b>
+              {typeof satInfo.cloud === "number" && (
+                <span style={{ color: satInfo.cloud > 40 ? "#b45309" : "#16a34a" }}>
+                  {" "}· ☁️ {Math.round(satInfo.cloud)}% nubes
+                  {satInfo.cloud > 40 ? " (puede verse tapado)" : ""}
+                </span>
+              )}
+            </span>
+          ) : null}
         </div>
       )}
 
