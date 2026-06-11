@@ -1108,10 +1108,11 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
     }
     if (capaSat === "base" || !SENTINEL_WMS_URL) return;
 
-    // Ventana de 12 días hacia atrás: el satélite pasa cada ~5 días,
-    // así siempre hay al menos una imagen y se muestra la más reciente.
+    // Ventana de 35 días hacia atrás: el satélite pasa cada ~5 días pero en
+    // épocas nubladas pueden pasar semanas sin una imagen limpia. El WMS
+    // siempre muestra la pasada más reciente disponible dentro de la ventana.
     const desdeDate = new Date(fechaSat + "T00:00:00");
-    desdeDate.setDate(desdeDate.getDate() - 12);
+    desdeDate.setDate(desdeDate.getDate() - 35);
     const desde = desdeDate.toISOString().slice(0, 10);
 
     const layer = L.tileLayer.wms(SENTINEL_WMS_URL, {
@@ -1239,7 +1240,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
           )}
           {capaSat !== "base" && (
             <span style={{ fontSize: 11, color: "#9ca3af" }}>
-              Sentinel-2 · pasa cada ~5 días · si se ve gris/nublado probá otra fecha
+              Sentinel-2 · muestra la última imagen limpia hasta la fecha elegida
             </span>
           )}
         </div>
