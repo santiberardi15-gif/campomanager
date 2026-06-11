@@ -4700,6 +4700,239 @@ function HistorialPage({data,orgId,toast,reload}){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// 📄 REPORTE MENSUAL — resumen imprimible de todo lo que pasó en el mes
+// ════════════════════════════════════════════════════════════════════════════
+function ReportePage({data,orgId}){
+  const now=new Date();
+  const [mesSel,setMesSel]=useState(now.getMonth());
+  const [anioSel,setAnioSel]=useState(now.getFullYear());
+  const [campoFil,setCampoFil]=useState("Todos los campos");
+  const MESES=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
+  const esTodos=campoFil==="Todos los campos";
+  const sinGastos=ocultaGastos(orgId);
+
+  const enMes=(fecha,m=mesSel,a=anioSel)=>{
+    if(!fecha)return false;
+    const d=new Date(fecha.length===10?fecha+"T12:00:00":fecha);
+    return d.getMonth()===m&&d.getFullYear()===a;
+  };
+  const filtra=arr=>(arr||[]).filter(x=>esTodos||x.campo===campoFil);
+  const fmtMonto=v=>"$ "+Number(v||0).toLocaleString("es-AR",{maximumFractionDigits:0});
+
+  // ── Lluvias ──
+  const lluviasMes=filtra(data.lluvias).filter(l=>enMes(l.fecha));
+  const mmMes=lluviasMes.reduce((s,l)=>s+Number(l.mm||0),0);
+  const mayorEvento=lluviasMes.length?Math.max(...lluviasMes.map(l=>Number(l.mm||0))):0;
+  const mmMismoMesAnt=filtra(data.lluvias).filter(l=>enMes(l.fecha,mesSel,anioSel-1)).reduce((s,l)=>s+Number(l.mm||0),0);
+  const acumHasta=(a)=>filtra(data.lluvias).filter(l=>{
+    if(!l.fecha)return false;
+    const d=new Date(l.fecha+"T12:00:00");
+    return d.getFullYear()===a&&d.getMonth()<=mesSel;
+  }).reduce((s,l)=>s+Number(l.mm||0),0);
+  const acumAnio=acumHasta(anioSel), acumAnioAnt=acumHasta(anioSel-1);
+
+  // ── Gastos ──
+  const finMes=filtra(data.finanzas).filter(f=>enMes(f.fecha));
+  const egresosMes=finMes.filter(f=>f.tipo!=="Ingreso").reduce((s,f)=>s+Number(f.monto||0),0);
+  const ingresosMes=finMes.filter(f=>f.tipo==="Ingreso").reduce((s,f)=>s+Number(f.monto||0),0);
+  const mesPrev=mesSel===0?{m:11,a:anioSel-1}:{m:mesSel-1,a:anioSel};
+  const egresosMesPrev=filtra(data.finanzas).filter(f=>enMes(f.fecha,mesPrev.m,mesPrev.a)&&f.tipo!=="Ingreso").reduce((s,f)=>s+Number(f.monto||0),0);
+  const porCategoria=Object.entries(
+    finMes.filter(f=>f.tipo!=="Ingreso").reduce((acc,f)=>{
+      const k=f.categoria||"Sin categoría";
+      acc[k]=(acc[k]||0)+Number(f.monto||0);
+      return acc;
+    },{})
+  ).sort((a,b)=>b[1]-a[1]);
+
+  // ── Órdenes de trabajo ──
+  const ordMes=filtra(data.ordenes).filter(o=>enMes(o.fecha));
+  const ordCompletadas=ordMes.filter(o=>o.estado==="Completada");
+  const ordPendientes=filtra(data.ordenes).filter(o=>o.estado==="Pendiente");
+
+  // ── Hacienda ──
+  const animalesFil=filtra(data.animales);
+  const totalCabezas=animalesFil.reduce((s,a)=>s+Number(a.cabezas||0),0);
+  const cabezasPorTipo=Object.entries(
+    animalesFil.reduce((acc,a)=>{
+      const k=a.tipo||"Sin categoría";
+      acc[k]=(acc[k]||0)+Number(a.cabezas||0);
+      return acc;
+    },{})
+  ).sort((a,b)=>b[1]-a[1]);
+  const movsMes=(data.movimientos||[]).filter(mv=>
+    enMes(mv.fecha)&&(esTodos||mv.campo_origen===campoFil||mv.campo_destino===campoFil)
+  );
+
+  const hayDatos=lluviasMes.length||finMes.length||ordMes.length||movsMes.length;
+
+  const imprimir=()=>{
+    const t=document.title;
+    document.title=`Reporte ${MESES[mesSel]} ${anioSel} - Campo Manager`;
+    window.print();
+    document.title=t;
+  };
+
+  const Seccion=({titulo,children})=>(
+    <div style={{marginBottom:22}}>
+      <div style={{fontWeight:800,fontSize:14,color:"#166534",borderBottom:"2px solid #dcfce7",paddingBottom:5,marginBottom:10}}>{titulo}</div>
+      {children}
+    </div>
+  );
+  const Dato=({label,value,sub})=>(
+    <div style={{flex:"1 1 120px",background:"#f9fafb",borderRadius:8,padding:"8px 12px"}}>
+      <div style={{fontSize:10,color:"#6b7280",fontWeight:700,textTransform:"uppercase"}}>{label}</div>
+      <div style={{fontSize:17,fontWeight:800}}>{value}</div>
+      {sub&&<div style={{fontSize:10,color:"#9ca3af"}}>{sub}</div>}
+    </div>
+  );
+  const tdL={padding:"4px 8px",fontSize:12,borderBottom:"1px solid #f3f4f6"};
+  const tdR={...tdL,textAlign:"right",fontWeight:600};
+
+  return(
+    <div>
+      <style>{`@media print{
+        body *{visibility:hidden!important;}
+        #reporte-print,#reporte-print *{visibility:visible!important;}
+        #reporte-print{position:absolute!important;left:0;top:0;width:100%;box-shadow:none!important;border-radius:0!important;}
+      }`}</style>
+
+      {/* Controles (no salen en la impresión) */}
+      <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        <select value={campoFil} onChange={e=>setCampoFil(e.target.value)} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+          <option>Todos los campos</option>
+          {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
+        </select>
+        <select value={mesSel} onChange={e=>setMesSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+          {MESES.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
+        </select>
+        <select value={anioSel} onChange={e=>setAnioSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+          {[anioSel+1,anioSel,anioSel-1,anioSel-2].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>b-a).map(a=><option key={a} value={a}>{a}</option>)}
+        </select>
+        <Btn onClick={imprimir}>🖨️ Imprimir / Guardar PDF</Btn>
+      </div>
+
+      {/* ── Documento imprimible ── */}
+      <div id="reporte-print" style={{background:"#fff",borderRadius:14,padding:28,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",maxWidth:820}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",borderBottom:"3px solid #166534",paddingBottom:12,marginBottom:18,flexWrap:"wrap",gap:8}}>
+          <div>
+            <div style={{fontSize:20,fontWeight:800,color:"#166534"}}>Reporte Mensual</div>
+            <div style={{fontSize:14,fontWeight:600}}>{MESES[mesSel]} {anioSel} · {campoFil}</div>
+          </div>
+          <div style={{fontSize:11,color:"#9ca3af",textAlign:"right"}}>
+            Campo Manager<br/>Generado el {new Date().toLocaleDateString("es-AR",{day:"numeric",month:"long",year:"numeric"})}
+          </div>
+        </div>
+
+        {!hayDatos&&<div style={{textAlign:"center",padding:"30px 0",color:"#9ca3af"}}>Sin actividad registrada en {MESES[mesSel]} {anioSel}.</div>}
+
+        {/* Lluvias */}
+        {(lluviasMes.length>0||acumAnio>0)&&(
+          <Seccion titulo="🌧️ LLUVIAS">
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+              <Dato label={`${MESES[mesSel]}`} value={`${mmMes} mm`} sub={`${lluviasMes.length} evento(s)`}/>
+              <Dato label="Mayor evento" value={`${mayorEvento} mm`}/>
+              <Dato label={`${MESES[mesSel]} ${anioSel-1}`} value={`${mmMismoMesAnt} mm`} sub="mismo mes, año anterior"/>
+              <Dato label={`Acum. ${anioSel} (a ${MESES[mesSel].slice(0,3).toLowerCase()})`} value={`${acumAnio} mm`} sub={`vs ${acumAnioAnt} mm en ${anioSel-1}`}/>
+            </div>
+            {lluviasMes.length>0&&(
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <tbody>
+                  {lluviasMes.sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).map((l,i)=>(
+                    <tr key={i}>
+                      <td style={tdL}>{new Date(l.fecha+"T12:00:00").toLocaleDateString("es-AR",{day:"numeric",month:"short"})}</td>
+                      {esTodos&&<td style={tdL}>{l.campo}</td>}
+                      <td style={tdR}>{l.mm} mm</td>
+                      <td style={{...tdL,color:"#9ca3af"}}>{l.obs||""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Seccion>
+        )}
+
+        {/* Gastos */}
+        {!sinGastos&&finMes.length>0&&(
+          <Seccion titulo="💰 GASTOS E INGRESOS">
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+              <Dato label="Egresos del mes" value={fmtMonto(egresosMes)} sub={egresosMesPrev>0?`mes anterior: ${fmtMonto(egresosMesPrev)}`:undefined}/>
+              {ingresosMes>0&&<Dato label="Ingresos del mes" value={fmtMonto(ingresosMes)}/>}
+              <Dato label="Movimientos" value={finMes.length}/>
+            </div>
+            {porCategoria.length>0&&(
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <tbody>
+                  {porCategoria.map(([cat,monto])=>(
+                    <tr key={cat}>
+                      <td style={tdL}>{cat}</td>
+                      <td style={tdR}>{fmtMonto(monto)}</td>
+                      <td style={{...tdL,color:"#9ca3af",width:60}}>{egresosMes>0?Math.round(monto/egresosMes*100)+"%":""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Seccion>
+        )}
+
+        {/* Órdenes */}
+        {(ordMes.length>0||ordPendientes.length>0)&&(
+          <Seccion titulo="📋 ÓRDENES DE TRABAJO">
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+              <Dato label="Del mes" value={ordMes.length}/>
+              <Dato label="Completadas" value={ordCompletadas.length}/>
+              <Dato label="Pendientes (hoy)" value={ordPendientes.length}/>
+            </div>
+            {ordMes.length>0&&(
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <tbody>
+                  {ordMes.sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).slice(0,15).map((o,i)=>(
+                    <tr key={i}>
+                      <td style={tdL}>{o.fecha?new Date(o.fecha+"T12:00:00").toLocaleDateString("es-AR",{day:"numeric",month:"short"}):"—"}</td>
+                      <td style={tdL}>{o.titulo}</td>
+                      {esTodos&&<td style={tdL}>{o.campo||""}</td>}
+                      <td style={{...tdR,color:o.estado==="Completada"?"#15803d":"#b45309"}}>{o.estado}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Seccion>
+        )}
+
+        {/* Hacienda */}
+        {(totalCabezas>0||movsMes.length>0)&&(
+          <Seccion titulo="🐄 HACIENDA">
+            <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
+              <Dato label="Cabezas actuales" value={totalCabezas.toLocaleString("es-AR")} sub="al día de hoy"/>
+              {cabezasPorTipo.slice(0,4).map(([tipo,cab])=><Dato key={tipo} label={tipo} value={cab.toLocaleString("es-AR")}/>)}
+            </div>
+            {movsMes.length>0&&(
+              <table style={{width:"100%",borderCollapse:"collapse"}}>
+                <tbody>
+                  {movsMes.sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).slice(0,12).map((mv,i)=>(
+                    <tr key={i}>
+                      <td style={tdL}>{new Date(mv.fecha+"T12:00:00").toLocaleDateString("es-AR",{day:"numeric",month:"short"})}</td>
+                      <td style={tdL}>{mv.descripcion}</td>
+                      <td style={tdR}>{mv.cantidad?`${mv.cantidad} cab.`:""}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </Seccion>
+        )}
+
+        <div style={{borderTop:"1px solid #e5e7eb",paddingTop:8,fontSize:10,color:"#9ca3af",textAlign:"center"}}>
+          Reporte generado automáticamente por Campo Manager · {campoFil} · {MESES[mesSel]} {anioSel}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════
 const NAV=[
@@ -4716,6 +4949,7 @@ const NAV=[
   {group:"OPERACIONES",items:[
     {id:"ordenes",label:"Órdenes",icon:I.clipboard},
     {id:"documentos",label:"Documentos",icon:I.file},
+    {id:"reportes",label:"Reportes",icon:I.file},
     {id:"historial",label:"Historial",icon:I.history},
   ]},
   {group:"EQUIPO",items:[
@@ -4725,7 +4959,7 @@ const NAV=[
     {id:"config",label:"Configuración",icon:I.settings},
   ]},
 ];
-const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",historial:"Historial de Movimientos",colaboradores:"Colaboradores",config:"Configuración"};
+const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",reportes:"Reportes",historial:"Historial de Movimientos",colaboradores:"Colaboradores",config:"Configuración"};
 
 const TopActions=({page,onAction,miRol})=>{
   const map={
@@ -4892,6 +5126,7 @@ export default function App(){
     finanzas:sinGastos?<ResumenPage {...props}/>:<FinanzasPage {...props}/>,
     ordenes:<OrdenesPage {...props}/>,
     documentos:<DocumentosPage {...props}/>,
+    reportes:<ReportePage {...props}/>,
     historial:<HistorialPage {...props}/>,
     colaboradores:<ColaboradoresPage {...props}/>,
     config:<ConfigPage {...props} setDolar={setDolar} onLogout={onLogout} user={user} logoUrl={logoUrl} setLogoUrl={setLogoUrl}/>,
