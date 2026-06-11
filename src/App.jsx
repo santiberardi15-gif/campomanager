@@ -32,6 +32,14 @@ const SENTINEL_WFS_URL = SENTINEL_INSTANCE_ID
   ? `https://sh.dataspace.copernicus.eu/ogc/wfs/${SENTINEL_INSTANCE_ID}`
   : null;
 
+// Escapa texto del usuario antes de insertarlo en HTML crudo (tooltips/labels de
+// Leaflet, que NO pasan por el escapado automático de React). Previene XSS.
+function escapeHtml(v) {
+  return String(v ?? "").replace(/[&<>"']/g, c => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
 // Formatea "2026-05-25" → "25 de mayo de 2026"
 function fmtFechaSat(iso) {
   try {
@@ -1110,7 +1118,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
       });
       polygon.on("click", () => setSelected(lote));
       polygon.bindTooltip(
-        `<b>${lote.nombre || `Lote ${lote.numero}`}</b><br>${lote.hectareas} ha${lote.cultivo ? ` · ${lote.cultivo}` : ""}`
+        `<b>${escapeHtml(lote.nombre || `Lote ${lote.numero}`)}</b><br>${escapeHtml(lote.hectareas)} ha${lote.cultivo ? ` · ${escapeHtml(lote.cultivo)}` : ""}`
       );
       drawnItems.addLayer(polygon);
 
@@ -1121,7 +1129,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
         const approxWidth = Math.max(40, displayName.length * 7 + 18);
         const labelIcon = L.divIcon({
           className: "lote-label",
-          html: `<div style="background:${color};color:#fff;border-radius:14px;padding:4px 10px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);white-space:nowrap;line-height:1.1">${displayName}</div>`,
+          html: `<div style="background:${color};color:#fff;border-radius:14px;padding:4px 10px;display:inline-flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;border:2px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.3);white-space:nowrap;line-height:1.1">${escapeHtml(displayName)}</div>`,
           iconSize: [approxWidth, 24],
           iconAnchor: [approxWidth / 2, 12],
         });
