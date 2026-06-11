@@ -119,6 +119,36 @@ function fmtFechaSat(iso) {
   } catch { return iso; }
 }
 
+// 🌦️ Centro geográfico de un campo (promedio de los puntos de sus lotes)
+function centroCampo(campo) {
+  const pts = (campo?.lotes_data || []).filter(l => l.coords?.length).flatMap(l => l.coords);
+  if (!pts.length) return null;
+  return [
+    pts.reduce((s, p) => s + p[0], 0) / pts.length,
+    pts.reduce((s, p) => s + p[1], 0) / pts.length,
+  ];
+}
+
+// 🌦️ Emoji según el código de clima WMO de Open-Meteo
+function emojiClima(code) {
+  if (code === 0) return "☀️";
+  if (code <= 2) return "🌤️";
+  if (code === 3) return "☁️";
+  if (code <= 48) return "🌫️";
+  if (code <= 57) return "🌦️";
+  if (code <= 67) return "🌧️";
+  if (code <= 77) return "🌨️";
+  if (code <= 82) return "🌧️";
+  return "⛈️";
+}
+
+// 🌦️ "Hoy" / "Mañana" / "vie 13"
+function nombreDiaPronostico(iso, idx) {
+  if (idx === 0) return "Hoy";
+  if (idx === 1) return "Mañana";
+  return new Date(iso + "T12:00:00").toLocaleDateString("es-AR", { weekday: "short", day: "numeric" });
+}
+
 // 🛰️ Consulta al WFS qué imágenes Sentinel-2 hay para un área (bbox) hasta una
 // fecha, y devuelve la más reciente con menos nubes. Devuelve { date, cloud }
 // o null si no hay ninguna en la ventana.
@@ -2928,6 +2958,39 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
     .filter(l=>campoFil==="Todos los campos"||l.campo===campoFil)
     .sort((a,b)=>(b.fecha||"").localeCompare(a.fecha||""));
 
+  // ── 🌦️ Pronóstico 7 días (Open-Meteo, gratis y sin API key) ──
+  const [pronostico,setPronostico]=useState(null);
+  useEffect(()=>{
+    // Campo seleccionado, o el primero que tenga lotes dibujados
+    const campoSel = campoFil==="Todos los campos"
+      ? data.campos.find(c=>centroCampo(c))
+      : data.campos.find(c=>c.nombre===campoFil);
+    const centro = centroCampo(campoSel);
+    if(!centro){ setPronostico(null); return; }
+    let cancel=false;
+    (async()=>{
+      try{
+        const res=await fetch(
+          `https://api.open-meteo.com/v1/forecast?latitude=${centro[0].toFixed(4)}&longitude=${centro[1].toFixed(4)}`+
+          `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max`+
+          `&timezone=auto&forecast_days=7`
+        );
+        const d=await res.json();
+        if(cancel||!d.daily) return;
+        setPronostico(d.daily.time.map((t,i)=>({
+          fecha:t,
+          code:d.daily.weather_code[i],
+          tmax:Math.round(d.daily.temperature_2m_max[i]),
+          tmin:Math.round(d.daily.temperature_2m_min[i]),
+          mm:d.daily.precipitation_sum[i]??0,
+          prob:d.daily.precipitation_probability_max[i]??0,
+        })));
+      }catch{ if(!cancel) setPronostico(null); }
+    })();
+    return()=>{cancel=true;};
+  },[campoFil,data.campos]);
+  const mmProx7=pronostico?pronostico.reduce((s,d)=>s+Number(d.mm||0),0):0;
+
   const m=now.getMonth();
   const y=now.getFullYear();
   const meses2=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
@@ -3018,6 +3081,38 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
           {anios.map(a=><option key={a} value={a}>{a}</option>)}
         </select>
       </div>
+
+      {/* 🌦️ Pronóstico próximos 7 días */}
+      {pronostico && (
+        <div style={{background:"#fff",borderRadius:14,padding:16,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8,marginBottom:12}}>
+            <div style={{fontWeight:700}}>
+              Pronóstico próximos 7 días{campoFil!=="Todos los campos"?` — ${campoFil}`:""}
+            </div>
+            <div style={{fontSize:13,fontWeight:700,color:mmProx7>0?"#2563eb":"#9ca3af"}}>
+              💧 {Math.round(mmProx7)} mm esperados
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,overflowX:"auto",paddingBottom:4}}>
+            {pronostico.map((d,i)=>(
+              <div key={d.fecha} style={{
+                flex:"1 0 90px",minWidth:90,textAlign:"center",borderRadius:10,padding:"10px 6px",
+                background:Number(d.mm)>0?"#eff6ff":"#f9fafb",
+                border:Number(d.mm)>0?"1px solid #bfdbfe":"1px solid #f3f4f6",
+              }}>
+                <div style={{fontSize:11,fontWeight:700,color:"#6b7280",textTransform:"capitalize"}}>{nombreDiaPronostico(d.fecha,i)}</div>
+                <div style={{fontSize:24,margin:"4px 0"}}>{emojiClima(d.code)}</div>
+                <div style={{fontSize:12,fontWeight:600}}>{d.tmax}° <span style={{color:"#9ca3af",fontWeight:400}}>/ {d.tmin}°</span></div>
+                <div style={{fontSize:12,fontWeight:700,color:Number(d.mm)>0?"#2563eb":"#d1d5db",marginTop:2}}>
+                  {Number(d.mm)>0?`${d.mm} mm`:"—"}
+                </div>
+                {Number(d.prob)>0&&<div style={{fontSize:10,color:"#9ca3af"}}>{d.prob}% prob.</div>}
+              </div>
+            ))}
+          </div>
+          <div style={{fontSize:10,color:"#9ca3af",marginTop:8}}>Fuente: Open-Meteo · ubicación según los lotes del campo</div>
+        </div>
+      )}
 
       <div style={{display:"flex",gap:12,marginBottom:20,flexWrap:"wrap"}}>
         {vista==="anual"
