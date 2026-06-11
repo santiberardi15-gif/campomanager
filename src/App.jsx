@@ -2991,6 +2991,62 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
   },[campoFil,data.campos]);
   const mmProx7=pronostico?pronostico.reduce((s,d)=>s+Number(d.mm||0),0):0;
 
+  // ── 🌧️ Sugerencias: el modelo estimó lluvia en días pasados sin registro ──
+  const [sugLluvia,setSugLluvia]=useState([]);
+  const [sugMm,setSugMm]=useState({}); // valor del input de cada sugerencia
+  useEffect(()=>{
+    let cancel=false;
+    const camposConCentro=data.campos
+      .map(c=>({c,centro:centroCampo(c)}))
+      .filter(x=>x.centro);
+    if(!camposConCentro.length){setSugLluvia([]);return;}
+    const descartadas=JSON.parse(localStorage.getItem("lluviaSugDescartadas")||"[]");
+    (async()=>{
+      const sugs=[];
+      for(const {c,centro} of camposConCentro){
+        try{
+          const res=await fetch(
+            `https://api.open-meteo.com/v1/forecast?latitude=${centro[0].toFixed(4)}&longitude=${centro[1].toFixed(4)}`+
+            `&daily=precipitation_sum&timezone=auto&past_days=3&forecast_days=1`
+          );
+          const d=await res.json();
+          if(!d.daily) continue;
+          const hoy=todayISO();
+          d.daily.time.forEach((t,i)=>{
+            const mm=d.daily.precipitation_sum[i];
+            if(t>=hoy||!mm||mm<1) return;               // solo días pasados con lluvia estimada
+            if(data.lluvias.some(l=>l.campo===c.nombre&&l.fecha===t)) return; // ya registrado
+            if(descartadas.includes(`${c.nombre}|${t}`)) return;             // ya descartado
+            sugs.push({campo:c.nombre,fecha:t,mm:Math.round(mm)});
+          });
+        }catch{}
+      }
+      if(!cancel) setSugLluvia(sugs.sort((a,b)=>b.fecha.localeCompare(a.fecha)));
+    })();
+    return()=>{cancel=true;};
+  },[data.campos,data.lluvias]);
+
+  const registrarSug=async(s)=>{
+    const key=`${s.campo}|${s.fecha}`;
+    const mm=Number(sugMm[key]??s.mm);
+    if(Number.isNaN(mm)||mm<0){toast("Ingresá los mm del pluviómetro","error");return;}
+    const {error}=await sb.from("lluvias").insert({
+      org_id:orgId,campo:s.campo,fecha:s.fecha,mm,
+      obs:`Pluviómetro (el modelo estimaba ${s.mm} mm)`,
+    });
+    if(error){toast(error.message,"error");return;}
+    toast("Lluvia registrada ✅");
+    setSugLluvia(prev=>prev.filter(x=>`${x.campo}|${x.fecha}`!==key));
+    reload();
+  };
+
+  const descartarSug=(s)=>{
+    const key=`${s.campo}|${s.fecha}`;
+    const d=JSON.parse(localStorage.getItem("lluviaSugDescartadas")||"[]");
+    localStorage.setItem("lluviaSugDescartadas",JSON.stringify([...d,key].slice(-100)));
+    setSugLluvia(prev=>prev.filter(x=>`${x.campo}|${x.fecha}`!==key));
+  };
+
   const m=now.getMonth();
   const y=now.getFullYear();
   const meses2=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
@@ -3081,6 +3137,39 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
           {anios.map(a=><option key={a} value={a}>{a}</option>)}
         </select>
       </div>
+
+      {/* 🌧️ Sugerencias de lluvia caída sin registrar */}
+      {sugLluvia.map(s=>{
+        const key=`${s.campo}|${s.fecha}`;
+        const ayer=new Date(Date.now()-86400000).toISOString().slice(0,10);
+        const cuando=s.fecha===ayer
+          ?"Ayer"
+          :`El ${new Date(s.fecha+"T12:00:00").toLocaleDateString("es-AR",{weekday:"long",day:"numeric"})}`;
+        return (
+          <div key={key} style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:12,padding:"12px 16px",marginBottom:12,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+            <span style={{fontSize:13,flex:"1 1 280px"}}>
+              🌧️ <b>{cuando}</b> el modelo estimó <b>{s.mm} mm</b> en <b>{s.campo}</b>. ¿Cuántos marcó el pluviómetro?
+            </span>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <input
+                type="number" min="0" step="1"
+                value={sugMm[key]??s.mm}
+                onChange={e=>setSugMm(prev=>({...prev,[key]:e.target.value}))}
+                style={{width:70,padding:"7px 10px",borderRadius:8,border:"1.5px solid #bfdbfe",fontSize:13,textAlign:"right"}}
+              />
+              <span style={{fontSize:13,color:"#6b7280"}}>mm</span>
+              <Btn small onClick={()=>registrarSug(s)}>Registrar</Btn>
+              <button
+                onClick={()=>descartarSug(s)}
+                style={{padding:"7px 12px",borderRadius:8,fontSize:12,border:"1.5px solid #e5e7eb",background:"#fff",color:"#6b7280",cursor:"pointer"}}
+                title="No mostrar más esta sugerencia"
+              >
+                Descartar
+              </button>
+            </div>
+          </div>
+        );
+      })}
 
       {/* 🌦️ Pronóstico próximos 7 días */}
       {pronostico && (
