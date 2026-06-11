@@ -40,6 +40,76 @@ function escapeHtml(v) {
   ));
 }
 
+// 🌱 Evalscript que devuelve NDVI crudo codificado en gris (0-255) + máscara en alfa.
+// Se pasa por parámetro EVALSCRIPT (base64) para no depender de capas extra en Copernicus.
+const NDVI_EVALSCRIPT = `//VERSION=3
+function setup(){return{input:["B04","B08","dataMask"],output:{bands:2,sampleType:"UINT8"}};}
+function evaluatePixel(s){var n=(s.B08-s.B04)/(s.B08+s.B04+1e-6);return[Math.round((n+1)*127.5),s.dataMask*255];}`;
+
+// ¿El punto (lat,lng) cae adentro del polígono? (ray casting sobre coords [lat,lng])
+function puntoEnPoligono(lat, lng, coords) {
+  let dentro = false;
+  for (let i = 0, j = coords.length - 1; i < coords.length; j = i++) {
+    const [yi, xi] = coords[i], [yj, xj] = coords[j];
+    if (((yi > lat) !== (yj > lat)) && (lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi)) {
+      dentro = !dentro;
+    }
+  }
+  return dentro;
+}
+
+// 🌱 NDVI promedio de UN lote para una fecha dada: pide al WMS una imagen chica
+// del bbox del lote con el evalscript crudo, y promedia los píxeles que caen
+// adentro del polígono. Devuelve número (-1..1) o null si no hay datos.
+async function ndviPromedioLote(lote, fecha) {
+  if (!SENTINEL_WMS_URL || !lote.coords || lote.coords.length < 3) return null;
+  const lats = lote.coords.map(c => c[0]), lngs = lote.coords.map(c => c[1]);
+  const s = Math.min(...lats), n = Math.max(...lats);
+  const w = Math.min(...lngs), e = Math.max(...lngs);
+  // Resolución proporcional al lote, máx 96px de lado (alcanza y consume poco)
+  const ratio = (e - w) / ((n - s) || 1e-9);
+  let W, H;
+  if (ratio >= 1) { W = 96; H = Math.max(16, Math.round(96 / ratio)); }
+  else { H = 96; W = Math.max(16, Math.round(96 * ratio)); }
+  const url = `${SENTINEL_WMS_URL}?SERVICE=WMS&REQUEST=GetMap&VERSION=1.3.0` +
+    `&LAYERS=VEGETATION_INDEX&CRS=EPSG:4326&BBOX=${s},${w},${n},${e}` +
+    `&WIDTH=${W}&HEIGHT=${H}&FORMAT=image/png&TIME=${fecha}` +
+    `&EVALSCRIPT=${encodeURIComponent(btoa(NDVI_EVALSCRIPT))}`;
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const bmp = await createImageBitmap(await res.blob());
+    const canvas = document.createElement("canvas");
+    canvas.width = bmp.width; canvas.height = bmp.height;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(bmp, 0, 0);
+    const px = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+    let suma = 0, cant = 0;
+    for (let y = 0; y < bmp.height; y++) {
+      const lat = n - ((y + 0.5) / bmp.height) * (n - s);
+      for (let x = 0; x < bmp.width; x++) {
+        const i = (y * bmp.width + x) * 4;
+        if (px[i + 3] === 0) continue; // sin datos
+        const lng = w + ((x + 0.5) / bmp.width) * (e - w);
+        if (!puntoEnPoligono(lat, lng, lote.coords)) continue;
+        suma += px[i] / 127.5 - 1;
+        cant++;
+      }
+    }
+    return cant > 0 ? suma / cant : null;
+  } catch {
+    return null;
+  }
+}
+
+// 🚦 Semáforo según el NDVI promedio del lote
+function semaforoNdvi(v) {
+  if (v == null) return { emoji: "⚪", color: "#9ca3af", label: "sin datos" };
+  if (v >= 0.5) return { emoji: "🟢", color: "#16a34a", label: "vigoroso" };
+  if (v >= 0.3) return { emoji: "🟡", color: "#ca8a04", label: "intermedio" };
+  return { emoji: "🔴", color: "#dc2626", label: "bajo / suelo" };
+}
+
 // Formatea "2026-05-25" → "25 de mayo de 2026"
 function fmtFechaSat(iso) {
   try {
@@ -895,6 +965,8 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
   const [satInfo, setSatInfo] = useState(null); // { date, cloud } de la imagen mostrada
   const [satCargando, setSatCargando] = useState(false);
   const [lotesVisibles, setLotesVisibles] = useState(true); // 👁️ mostrar/ocultar nombres y colores
+  const [ndviLotes, setNdviLotes] = useState({}); // 🌱 { [loteId]: { valor, fecha } }
+  const [ndviProgreso, setNdviProgreso] = useState(null); // null | { hecho, total }
 
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -1220,6 +1292,37 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
     }
   }, [lotesVisibles, mapReady, campo.lotes_data]);
 
+  // ── 🌱 NDVI promedio por lote (semáforo) ────────────────────────────────────
+  const calcularNdviLotes = async () => {
+    const conCoords = lotes.filter(l => l.coords && l.coords.length >= 3);
+    if (!SENTINEL_WMS_URL || conCoords.length === 0 || ndviProgreso) return;
+
+    // Buscar la imagen más reciente que cubra TODOS los lotes
+    const lats = conCoords.flatMap(l => l.coords.map(c => c[0]));
+    const lngs = conCoords.flatMap(l => l.coords.map(c => c[1]));
+    const bbox = [[Math.min(...lats), Math.min(...lngs)], [Math.max(...lats), Math.max(...lngs)]];
+    const hoy = new Date().toISOString().slice(0, 10);
+
+    setNdviProgreso({ hecho: 0, total: conCoords.length });
+    const img = await buscarImagenSentinel(bbox, hoy, 90);
+    if (!img) {
+      setNdviProgreso(null);
+      showMsg("⚠️ No hay imágenes satelitales recientes para calcular el NDVI.");
+      return;
+    }
+
+    // De a 5 lotes en paralelo para no saturar el servicio
+    const resultados = {};
+    for (let i = 0; i < conCoords.length; i += 5) {
+      const grupo = conCoords.slice(i, i + 5);
+      const valores = await Promise.all(grupo.map(l => ndviPromedioLote(l, img.date)));
+      grupo.forEach((l, j) => { resultados[l.id] = { valor: valores[j], fecha: img.date }; });
+      setNdviLotes({ ...resultados });
+      setNdviProgreso({ hecho: Math.min(i + 5, conCoords.length), total: conCoords.length });
+    }
+    setNdviProgreso(null);
+  };
+
   // ── Buscar localidad ───────────────────────────────────────────────────────
   const buscarLocalidad = async () => {
     if (!searchQuery || searchQuery.length < 3) return;
@@ -1356,7 +1459,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
       )}
 
       {lotes.length > 0 && (
-        <div style={{ marginBottom: 10 }}>
+        <div style={{ marginBottom: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <button
             onClick={() => setLotesVisibles(v => !v)}
             style={{
@@ -1370,6 +1473,29 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
           >
             {lotesVisibles ? "🙈 Ocultar lotes" : "👁️ Mostrar lotes"}
           </button>
+          {SENTINEL_WMS_URL && (
+            <button
+              onClick={calcularNdviLotes}
+              disabled={!!ndviProgreso}
+              style={{
+                padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                cursor: ndviProgreso ? "wait" : "pointer",
+                border: "1.5px solid #16a34a", background: "#16a34a", color: "#fff",
+                display: "inline-flex", alignItems: "center", gap: 6, opacity: ndviProgreso ? 0.7 : 1,
+              }}
+              title="Calcula el NDVI promedio de cada lote con la imagen satelital más reciente"
+            >
+              {ndviProgreso
+                ? `🛰️ Calculando ${ndviProgreso.hecho}/${ndviProgreso.total}…`
+                : "🚦 Calcular estado de lotes (NDVI)"}
+            </button>
+          )}
+          {Object.keys(ndviLotes).length > 0 && !ndviProgreso && (
+            <span style={{ fontSize: 11, color: "#6b7280" }}>
+              🟢 ≥ 0.50 vigoroso · 🟡 0.30–0.50 intermedio · 🔴 &lt; 0.30 bajo/suelo
+              {Object.values(ndviLotes)[0]?.fecha && <> · imagen del {fmtFechaSat(Object.values(ndviLotes)[0].fecha)}</>}
+            </span>
+          )}
         </div>
       )}
 
@@ -1382,7 +1508,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
-                  {["", "#", "Nombre", "Uso", "Hectáreas", ""].map((h, i) => (
+                  {["", "#", "Nombre", "Uso", "Hectáreas", "NDVI", ""].map((h, i) => (
                     <th key={i} style={{ textAlign: "left", padding: "6px 10px", fontSize: 11, fontWeight: 700, color: "#6b7280" }}>{h}</th>
                   ))}
                 </tr>
@@ -1402,6 +1528,19 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
                       <td style={{ padding: "6px 10px", fontSize: 13 }}>{l.nombre}</td>
                       <td style={{ padding: "6px 10px", fontSize: 13, color: l.cultivo ? "#111" : "#9ca3af" }}>{l.cultivo || "—"}</td>
                       <td style={{ padding: "6px 10px", fontSize: 13, fontWeight: 600 }}>{l.hectareas} ha</td>
+                      {/* 🌱 NDVI con semáforo */}
+                      <td style={{ padding: "6px 10px", fontSize: 13 }}>
+                        {(() => {
+                          const nd = ndviLotes[l.id];
+                          if (!nd) return <span style={{ color: "#d1d5db" }}>—</span>;
+                          const sem = semaforoNdvi(nd.valor);
+                          return (
+                            <span title={`${sem.label} · imagen del ${fmtFechaSat(nd.fecha)}`} style={{ fontWeight: 700, color: sem.color, whiteSpace: "nowrap" }}>
+                              {sem.emoji} {nd.valor != null ? nd.valor.toFixed(2) : "s/d"}
+                            </span>
+                          );
+                        })()}
+                      </td>
                       <td style={{ padding: "6px 10px" }}>
                         <div style={{ display: "flex", gap: 4 }}>
                           <Btn variant="ghost" small onClick={() => setFichaLote(l)} title="Abrir carpeta del lote"><I.folder /></Btn>
