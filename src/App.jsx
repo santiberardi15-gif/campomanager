@@ -21,6 +21,21 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY;
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// 🛰️ Copernicus Data Space (Sentinel-2): imágenes satelitales recientes + NDVI.
+// Crear una "configuración" en https://shapps.dataspace.copernicus.eu/dashboard/
+// con capas TRUE-COLOR y NDVI, y poner el Instance ID en .env como VITE_SENTINEL_INSTANCE_ID.
+const SENTINEL_INSTANCE_ID = import.meta.env.VITE_SENTINEL_INSTANCE_ID;
+const SENTINEL_WMS_URL = SENTINEL_INSTANCE_ID
+  ? `https://sh.dataspace.copernicus.eu/ogc/wms/${SENTINEL_INSTANCE_ID}`
+  : null;
+// IDs de las capas tal como están en la configuración de Copernicus
+// (plantilla "Simple Sentinel-2 L2A")
+const SENTINEL_CAPAS = [
+  { id: "base",             label: "🗺️ Mapa base" },
+  { id: "TRUE_COLOR",       label: "🛰️ Satélite reciente" },
+  { id: "VEGETATION_INDEX", label: "🌱 NDVI" },
+];
+
 // 🆕 Campos (org) que NO ven la sección Gastos / dólar / precios.
 // Para ocultarlo en un campo, agregá su org_id a esta lista.
 const ORGS_SIN_GASTOS = ["75ec51bc-1569-495b-9df4-666bc4dc84ad"]; // Campo de Santiago (MARIA AMELIA)
@@ -825,10 +840,15 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
   const [mapMsg, setMapMsg] = useState(null);
   const [mapReady, setMapReady] = useState(false); // 🆕 dispara el re-render cuando leaflet termina de cargar
 
+  // 🛰️ Capa satelital Sentinel-2: "base" (Esri) | "TRUE-COLOR" | "NDVI"
+  const [capaSat, setCapaSat] = useState("base");
+  const [fechaSat, setFechaSat] = useState(() => new Date().toISOString().slice(0, 10));
+
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
   const drawnItemsRef = useRef(null);
   const labelsLayerRef = useRef(null);
+  const sentinelLayerRef = useRef(null); // 🛰️ capa WMS activa de Sentinel
   const LRef = useRef(null);
 
   // 🆕 Refs SIEMPRE sincronizados con el último valor. Los handlers de Draw
@@ -1074,6 +1094,40 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
     // eslint-disable-next-line
   }, [campo.lotes_data, mapReady]);
 
+  // ── 🛰️ Capa Sentinel-2 (satélite reciente / NDVI) ──────────────────────────
+  useEffect(() => {
+    const pack = LRef.current;
+    const map = mapRef.current;
+    if (!pack || !map) return;
+    const { L } = pack;
+
+    // Sacar la capa anterior si había
+    if (sentinelLayerRef.current) {
+      map.removeLayer(sentinelLayerRef.current);
+      sentinelLayerRef.current = null;
+    }
+    if (capaSat === "base" || !SENTINEL_WMS_URL) return;
+
+    // Ventana de 12 días hacia atrás: el satélite pasa cada ~5 días,
+    // así siempre hay al menos una imagen y se muestra la más reciente.
+    const desdeDate = new Date(fechaSat + "T00:00:00");
+    desdeDate.setDate(desdeDate.getDate() - 12);
+    const desde = desdeDate.toISOString().slice(0, 10);
+
+    const layer = L.tileLayer.wms(SENTINEL_WMS_URL, {
+      layers: capaSat,
+      format: "image/png",
+      transparent: true,
+      version: "1.3.0",
+      time: `${desde}/${fechaSat}`,
+      maxcc: 60, // descarta pasadas con más de 60% de nubes
+      attribution: "Sentinel-2 &copy; Copernicus",
+      maxZoom: 19,
+    });
+    layer.addTo(map);
+    sentinelLayerRef.current = layer;
+  }, [capaSat, fechaSat, mapReady]);
+
   // ── Buscar localidad ───────────────────────────────────────────────────────
   const buscarLocalidad = async () => {
     if (!searchQuery || searchQuery.length < 3) return;
@@ -1146,6 +1200,48 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
       {mapMsg && (
         <div style={{ background: "#fef2f2", border: "1px solid #fecaca", borderRadius: 8, padding: "8px 12px", marginBottom: 10, fontSize: 13, color: "#dc2626" }}>
           {mapMsg}
+        </div>
+      )}
+
+      {/* 🛰️ Selector de capa satelital Sentinel-2 */}
+      {SENTINEL_WMS_URL && (
+        <div style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
+          {SENTINEL_CAPAS.map(c => (
+            <button
+              key={c.id}
+              onClick={() => setCapaSat(c.id)}
+              style={{
+                padding: "6px 12px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+                border: capaSat === c.id ? "1.5px solid #16a34a" : "1.5px solid #e5e7eb",
+                background: capaSat === c.id ? "#f0fdf4" : "#fff",
+                color: capaSat === c.id ? "#15803d" : "#374151",
+              }}
+            >
+              {c.label}
+            </button>
+          ))}
+          {capaSat !== "base" && (
+            <input
+              type="date"
+              value={fechaSat}
+              max={new Date().toISOString().slice(0, 10)}
+              onChange={(e) => e.target.value && setFechaSat(e.target.value)}
+              style={{ padding: "5px 10px", borderRadius: 8, border: "1.5px solid #e5e7eb", fontSize: 12 }}
+              title="Muestra la pasada más reciente del satélite en los 12 días previos a esta fecha"
+            />
+          )}
+          {capaSat === "VEGETATION_INDEX" && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#6b7280" }}>
+              <span>Suelo / agua</span>
+              <div style={{ width: 90, height: 10, borderRadius: 5, background: "linear-gradient(to right, #0000cc, #00ccff, #00cc44, #ffff00, #ff6600, #cc0000)" }} />
+              <span>Vegetación vigorosa</span>
+            </div>
+          )}
+          {capaSat !== "base" && (
+            <span style={{ fontSize: 11, color: "#9ca3af" }}>
+              Sentinel-2 · pasa cada ~5 días · si se ve gris/nublado probá otra fecha
+            </span>
+          )}
         </div>
       )}
 
