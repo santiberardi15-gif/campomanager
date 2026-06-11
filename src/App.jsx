@@ -894,6 +894,7 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
   const [fechaSat, setFechaSat] = useState(() => new Date().toISOString().slice(0, 10));
   const [satInfo, setSatInfo] = useState(null); // { date, cloud } de la imagen mostrada
   const [satCargando, setSatCargando] = useState(false);
+  const [lotesVisibles, setLotesVisibles] = useState(true); // 👁️ mostrar/ocultar nombres y colores
 
   const mapContainerRef = useRef(null);
   const mapRef = useRef(null);
@@ -1204,6 +1205,21 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
     return () => { cancelado = true; };
   }, [capaSat, fechaSat, mapReady]);
 
+  // ── 👁️ Mostrar / ocultar nombres y colores de los lotes (sin borrarlos) ─────
+  useEffect(() => {
+    const map = mapRef.current;
+    const dl = drawnItemsRef.current;
+    const ll = labelsLayerRef.current;
+    if (!map || !dl || !ll) return;
+    if (lotesVisibles) {
+      if (!map.hasLayer(dl)) map.addLayer(dl);
+      if (!map.hasLayer(ll)) map.addLayer(ll);
+    } else {
+      if (map.hasLayer(dl)) map.removeLayer(dl);
+      if (map.hasLayer(ll)) map.removeLayer(ll);
+    }
+  }, [lotesVisibles, mapReady, campo.lotes_data]);
+
   // ── Buscar localidad ───────────────────────────────────────────────────────
   const buscarLocalidad = async () => {
     if (!searchQuery || searchQuery.length < 3) return;
@@ -1336,6 +1352,24 @@ function LotesMapa({ campo, ordenes, campanas, onUpdate, orgId, data, reload, to
               )}
             </span>
           ) : null}
+        </div>
+      )}
+
+      {lotes.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          <button
+            onClick={() => setLotesVisibles(v => !v)}
+            style={{
+              padding: "6px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600, cursor: "pointer",
+              border: lotesVisibles ? "1.5px solid #16a34a" : "1.5px solid #e5e7eb",
+              background: lotesVisibles ? "#f0fdf4" : "#fff",
+              color: lotesVisibles ? "#15803d" : "#6b7280",
+              display: "inline-flex", alignItems: "center", gap: 6,
+            }}
+            title="Mostrar u ocultar los nombres y colores de los lotes para ver mejor el mapa"
+          >
+            {lotesVisibles ? "🙈 Ocultar lotes" : "👁️ Mostrar lotes"}
+          </button>
         </div>
       )}
 
