@@ -5113,6 +5113,114 @@ function ReportePage({data,orgId}){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// 🌱 COSTOS POR LOTE — cuánto se gastó (e ingresó) en cada potrero
+// ════════════════════════════════════════════════════════════════════════════
+function CostosLotePage({data,orgId}){
+  const camposConLotes=data.campos.filter(c=>(c.lotes_data||[]).length>0);
+  const [campoFil,setCampoFil]=useState(camposConLotes[0]?.nombre||"");
+  const [anioFil,setAnioFil]=useState("Todos");
+
+  const anios=[...new Set(data.finanzas.map(f=>f.fecha&&new Date(f.fecha+"T12:00:00").getFullYear()).filter(Boolean))].sort((a,b)=>b-a);
+
+  const campoSel=data.campos.find(c=>c.nombre===campoFil);
+  const lotes=campoSel?.lotes_data||[];
+
+  const enAnio=f=>anioFil==="Todos"||(f.fecha&&new Date(f.fecha+"T12:00:00").getFullYear()===Number(anioFil));
+  const finCampo=data.finanzas.filter(f=>f.campo===campoFil&&enAnio(f));
+  const esIngreso=f=>f.tipo==="Ingreso";
+
+  const filas=lotes.map(l=>{
+    const nombre=l.nombre||`Lote ${l.numero}`;
+    const delLote=finCampo.filter(f=>f.lote===nombre);
+    const gasto=delLote.filter(f=>!esIngreso(f)).reduce((s,f)=>s+Number(f.monto||0),0);
+    const ingreso=delLote.filter(esIngreso).reduce((s,f)=>s+Number(f.monto||0),0);
+    const ha=Number(l.hectareas||0);
+    return {nombre,ha,gasto,ingreso,margen:ingreso-gasto,porHa:ha>0?gasto/ha:0,n:delLote.length,cultivo:l.cultivo};
+  }).sort((a,b)=>b.gasto-a.gasto);
+
+  const sinLoteGasto=finCampo.filter(f=>!f.lote&&!esIngreso(f)).reduce((s,f)=>s+Number(f.monto||0),0);
+  const totalGasto=finCampo.filter(f=>!esIngreso(f)).reduce((s,f)=>s+Number(f.monto||0),0);
+  const imputado=filas.reduce((s,r)=>s+r.gasto,0);
+  const totalIngreso=finCampo.filter(esIngreso).reduce((s,f)=>s+Number(f.monto||0),0);
+  const hayIngresos=totalIngreso>0;
+  const maxGasto=Math.max(1,...filas.map(r=>r.gasto));
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <select value={campoFil} onChange={e=>setCampoFil(e.target.value)} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+          {camposConLotes.length===0&&<option value="">No hay campos con lotes</option>}
+          {camposConLotes.map(c=><option key={c.id}>{c.nombre}</option>)}
+        </select>
+        <select value={anioFil} onChange={e=>setAnioFil(e.target.value)} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+          <option>Todos</option>
+          {anios.map(a=><option key={a} value={a}>{a}</option>)}
+        </select>
+      </div>
+
+      {!campoFil ? (
+        <div style={{background:"#fff",borderRadius:14,padding:30,textAlign:"center",color:"#9ca3af"}}>
+          Dibujá lotes en el mapa de un campo para ver sus costos.
+        </div>
+      ):(
+        <>
+          <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+            <KPI label="Gasto total del campo" value={fmtK(totalGasto)} color="#ef4444" icon={<I.dollar/>}/>
+            <KPI label="Imputado a lotes" value={fmtK(imputado)} sub={totalGasto>0?`${Math.round(imputado/totalGasto*100)}% del total`:undefined} color="#16a34a"/>
+            <KPI label="Sin imputar (general)" value={fmtK(sinLoteGasto)} sub="gastos del campo sin lote"/>
+            {hayIngresos&&<KPI label="Ingresos" value={fmtK(totalIngreso)} color="#16a34a" icon={<I.arrowUp/>}/>}
+          </div>
+
+          <div style={{background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
+            <div style={{fontWeight:700,marginBottom:14}}>Costos por lote — {campoFil} {anioFil!=="Todos"?`· ${anioFil}`:""}</div>
+            {filas.length===0 ? (
+              <div style={{textAlign:"center",padding:"20px 0",color:"#9ca3af",fontSize:14}}>Este campo no tiene lotes.</div>
+            ):(
+              <div style={{overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse"}}>
+                  <thead><tr style={{borderBottom:"2px solid #f3f4f6"}}>
+                    {["Lote","Has","Gastado","$/ha",...(hayIngresos?["Ingreso","Margen"]:[]),""].map((h,i)=>(
+                      <th key={i} style={{textAlign:i>=2?"right":"left",padding:"8px 10px",fontSize:11,fontWeight:700,color:"#6b7280",whiteSpace:"nowrap"}}>{h}</th>
+                    ))}
+                  </tr></thead>
+                  <tbody>
+                    {filas.map(r=>(
+                      <tr key={r.nombre} style={{borderBottom:"1px solid #f9fafb"}}>
+                        <td style={{padding:"8px 10px",fontWeight:600,fontSize:13}}>{r.nombre}{r.cultivo&&<span style={{color:"#9ca3af",fontWeight:400}}> · {r.cultivo}</span>}</td>
+                        <td style={{padding:"8px 10px",fontSize:13,color:"#6b7280"}}>{r.ha||"—"}</td>
+                        <td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontSize:13,color:"#ef4444"}}>
+                          {r.gasto>0?fmtK(r.gasto):"—"}
+                          {r.gasto>0&&<div style={{height:4,borderRadius:2,marginTop:3,background:"#fecaca",width:`${Math.round(r.gasto/maxGasto*100)}%`,minWidth:6,marginLeft:"auto"}}/>}
+                        </td>
+                        <td style={{padding:"8px 10px",textAlign:"right",fontSize:13,color:"#6b7280"}}>{r.porHa>0?fmt(Math.round(r.porHa)):"—"}</td>
+                        {hayIngresos&&<td style={{padding:"8px 10px",textAlign:"right",fontSize:13,color:"#16a34a"}}>{r.ingreso>0?fmtK(r.ingreso):"—"}</td>}
+                        {hayIngresos&&<td style={{padding:"8px 10px",textAlign:"right",fontWeight:700,fontSize:13,color:r.margen>=0?"#16a34a":"#ef4444"}}>{(r.ingreso>0||r.gasto>0)?fmtK(r.margen):"—"}</td>}
+                        <td style={{padding:"8px 10px",fontSize:11,color:"#9ca3af",whiteSpace:"nowrap"}}>{r.n>0?`${r.n} mov.`:""}</td>
+                      </tr>
+                    ))}
+                    {sinLoteGasto>0&&(
+                      <tr style={{borderTop:"2px solid #f3f4f6",color:"#9ca3af"}}>
+                        <td style={{padding:"8px 10px",fontStyle:"italic",fontSize:13}}>General (sin lote)</td>
+                        <td/>
+                        <td style={{padding:"8px 10px",textAlign:"right",fontSize:13}}>{fmtK(sinLoteGasto)}</td>
+                        <td colSpan={hayIngresos?4:2}/>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div style={{fontSize:11,color:"#9ca3af",marginTop:12,borderTop:"1px solid #f3f4f6",paddingTop:10}}>
+              💡 Los costos llegan a cada lote al <b>completar órdenes de trabajo</b> con insumos. Si una orden abarca varios lotes, el costo se reparte entre ellos.
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════
 const NAV=[
@@ -5130,6 +5238,7 @@ const NAV=[
     {id:"ordenes",label:"Órdenes",icon:I.clipboard},
     {id:"documentos",label:"Documentos",icon:I.file},
     {id:"reportes",label:"Reportes",icon:I.file},
+    {id:"costoslote",label:"Costos x Lote",icon:I.dollar},
     {id:"historial",label:"Historial",icon:I.history},
   ]},
   {group:"EQUIPO",items:[
@@ -5139,7 +5248,7 @@ const NAV=[
     {id:"config",label:"Configuración",icon:I.settings},
   ]},
 ];
-const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",reportes:"Reportes",historial:"Historial de Movimientos",colaboradores:"Colaboradores",config:"Configuración"};
+const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",reportes:"Reportes",costoslote:"Costos por Lote",historial:"Historial de Movimientos",colaboradores:"Colaboradores",config:"Configuración"};
 
 const TopActions=({page,onAction,miRol})=>{
   const map={
@@ -5308,6 +5417,7 @@ export default function App(){
     ordenes:<OrdenesPage {...props}/>,
     documentos:<DocumentosPage {...props}/>,
     reportes:<ReportePage {...props}/>,
+    costoslote:<CostosLotePage {...props}/>,
     historial:<HistorialPage {...props}/>,
     colaboradores:<ColaboradoresPage {...props}/>,
     config:<ConfigPage {...props} setDolar={setDolar} onLogout={onLogout} user={user} logoUrl={logoUrl} setLogoUrl={setLogoUrl}/>,
