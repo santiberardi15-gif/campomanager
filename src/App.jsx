@@ -2430,7 +2430,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
       const {data:inserted,error}=await sb.from("stock").insert({...row,org_id:orgId}).select().single();
       if(error){toast(error.message,"error");return;}
       if(total>0){
-        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,monto:total,tc:tc||dolar,origen:"stock",origen_id:inserted.id});
+        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,lote:editItem.lote||"",monto:total,tc:tc||dolar,origen:"stock",origen_id:inserted.id});
       }
       // 📎 Archivar el remito del ingreso (si se adjuntó)
       if(editItem.remito){
@@ -2476,7 +2476,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
     const conceptoCompra = `Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`+(fechaLlegada?` · llega ${fmtDate(fechaLlegada)}`:"");
     // 🆕 Solo registramos el gasto si se cargó un precio (total > 0)
     if(total>0){
-      await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
+      await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,lote:comprarItem.lote||"",monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
     }
     // 📎 Archivar el remito en Documentos (si se adjuntó)
     if(comprarItem.remito){
@@ -2716,12 +2716,19 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
                   <label style={{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}}>Ubicación (campo)</label>
                   <div style={{padding:"9px 12px",borderRadius:8,border:"1.5px solid #fef3c7",background:"#fffbeb",fontSize:13,color:"#92400e"}}>No hay campos ingresados</div>
                 </div>
-              : <Sel label="Ubicación (campo)" value={editItem.ubicacion} onChange={e=>setEditItem({...editItem,ubicacion:e.target.value})}>
+              : <Sel label="Ubicación (campo)" value={editItem.ubicacion} onChange={e=>setEditItem({...editItem,ubicacion:e.target.value,lote:""})}>
                   <option value="">Seleccionar...</option>
                   {data.campos.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
                 </Sel>
             }
           </div>
+          {/* 🌱 Atribuir el costo a un lote (opcional) — solo al crear */}
+          {!editItem.id_real && (data.campos.find(c=>c.nombre===editItem.ubicacion)?.lotes_data||[]).length>0 && (
+            <Sel label="Lote / Potrero (opcional — para costos por lote)" value={editItem.lote||""} onChange={e=>setEditItem({...editItem,lote:e.target.value})}>
+              <option value="">— Todo el campo —</option>
+              {(data.campos.find(c=>c.nombre===editItem.ubicacion)?.lotes_data||[]).map(l=><option key={l.id} value={l.nombre||`Lote ${l.numero}`}>{l.nombre||`Lote ${l.numero}`}{l.cultivo?` (${l.cultivo})`:""}</option>)}
+            </Sel>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Inp label="Cantidad" type="number" value={editItem.cantidad} onChange={e=>setEditItem({...editItem,cantidad:e.target.value})}/>
             <Inp label="Stock mínimo" type="number" value={editItem.minimo} onChange={e=>setEditItem({...editItem,minimo:e.target.value})}/>
@@ -2774,6 +2781,8 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
         const costo = Number(comprarItem.costo_unit)||0;
         // total en ARS según moneda elegida
         const totalARS = comprarItem.moneda==="USD" ? cant*costo*(tc||0) : cant*costo;
+        const campoCompra = data.campos.find(c=>c.nombre===comprarItem.item.ubicacion);
+        const lotesCompra = campoCompra?.lotes_data||[];
         return(
         <Modal title={`Comprar ${comprarItem.item.nombre}`} onClose={()=>setComprarItem(null)}>
           <div style={{background:"#f0fdf4",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
@@ -2808,6 +2817,14 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
             <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#1d4ed8"}}>
               🚚 Llega en {Math.round((new Date(comprarItem.fecha_llegada)-new Date(comprarItem.fecha))/(1000*60*60*24))} días desde la compra
             </div>
+          )}
+
+          {/* 🌱 Atribuir el costo a un lote (opcional) */}
+          {lotesCompra.length>0&&(
+            <Sel label="Lote / Potrero (opcional — para costos por lote)" value={comprarItem.lote||""} onChange={e=>setComprarItem({...comprarItem,lote:e.target.value})}>
+              <option value="">— Todo el campo —</option>
+              {lotesCompra.map(l=><option key={l.id} value={l.nombre||`Lote ${l.numero}`}>{l.nombre||`Lote ${l.numero}`}{l.cultivo?` (${l.cultivo})`:""}</option>)}
+            </Sel>
           )}
 
           {/* 📎 Remito / factura — se archiva en Documentos › Remitos */}
@@ -3927,7 +3944,7 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
     } else {
       montoARS = montoIngresado; // 0 si no se cargó precio
     }
-    const row={fecha:editItem.fecha,tipo:"Egreso",concepto:editItem.concepto,categoria:editItem.categoria,campo:editItem.campo,monto:montoARS,tc:tc||dolar};
+    const row={fecha:editItem.fecha,tipo:"Egreso",concepto:editItem.concepto,categoria:editItem.categoria,campo:editItem.campo,lote:editItem.lote||"",monto:montoARS,tc:tc||dolar};
     if(editItem.id){
       const {error}=await sb.from("finanzas").update(row).eq("id",editItem.id);
       if(error){toast(error.message,"error");return;}
@@ -4053,7 +4070,7 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
                   <td style={{padding:"10px",fontSize:13}}>{fmtDate(f.fecha)}</td>
                   <td style={{padding:"10px",fontSize:13,maxWidth:240}}>{f.concepto}</td>
                   <td style={{padding:"10px",fontSize:12,color:"#6b7280"}}>{f.categoria}</td>
-                  <td style={{padding:"10px",fontSize:12,color:"#6b7280"}}>{f.campo||"—"}</td>
+                  <td style={{padding:"10px",fontSize:12,color:"#6b7280"}}>{f.campo||"—"}{f.lote?<span style={{color:"#16a34a"}}> · {f.lote}</span>:""}</td>
                   <td style={{padding:"10px",fontWeight:700,color:monedaVista==="ARS"?"#ef4444":"#9ca3af",whiteSpace:"nowrap"}}>-{fmtK(f.monto)}</td>
                   <td style={{padding:"10px",fontSize:monedaVista==="USD"?13:12,fontWeight:monedaVista==="USD"?700:400,color:monedaVista==="USD"?"#ef4444":"#9ca3af",whiteSpace:"nowrap"}}>U$ {usdDe(f).toLocaleString("es-AR",{maximumFractionDigits:0})}</td>
                   <td style={{padding:"10px",fontSize:12,color:"#9ca3af",whiteSpace:"nowrap"}}>{Number(f.tc)>0?`$ ${Number(f.tc).toLocaleString("es-AR")}`:"—"}</td>
@@ -4078,16 +4095,25 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
         const equiv = editItem.moneda==="USD"
           ? (tc>0 ? monto*tc : 0)        // ingresó USD -> muestro ARS
           : (tc>0 ? monto/tc : 0);       // ingresó ARS -> muestro USD
+        // Lotes del campo elegido (para atribuir el costo)
+        const campoObjFin = data.campos.find(c=>c.nombre===editItem.campo);
+        const lotesFin = campoObjFin?.lotes_data||[];
         return(
         <Modal title={editItem.id?"Editar Movimiento":"Nuevo Egreso"} onClose={()=>setEditItem(null)}>
           <Inp label="Concepto" value={editItem.concepto} onChange={e=>setEditItem({...editItem,concepto:e.target.value})}/>
           <Sel label="Categoría" value={editItem.categoria} onChange={e=>setEditItem({...editItem,categoria:e.target.value})}>
             {CATS.map(c=><option key={c}>{c}</option>)}
           </Sel>
-          <Sel label="Campo" value={editItem.campo} onChange={e=>setEditItem({...editItem,campo:e.target.value})}>
+          <Sel label="Campo" value={editItem.campo} onChange={e=>setEditItem({...editItem,campo:e.target.value,lote:""})}>
             <option value="">— Ninguno —</option>
             {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
           </Sel>
+          {lotesFin.length>0&&(
+            <Sel label="Lote / Potrero (opcional — para costos por lote)" value={editItem.lote||""} onChange={e=>setEditItem({...editItem,lote:e.target.value})}>
+              <option value="">— Todo el campo —</option>
+              {lotesFin.map(l=><option key={l.id} value={l.nombre||`Lote ${l.numero}`}>{l.nombre||`Lote ${l.numero}`}{l.cultivo?` (${l.cultivo})`:""}</option>)}
+            </Sel>
+          )}
           <Inp label="Fecha" type="date" value={editItem.fecha} onChange={e=>setEditItem({...editItem,fecha:e.target.value})}/>
 
           {/* 🆕 Moneda + monto */}
