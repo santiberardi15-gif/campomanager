@@ -2005,7 +2005,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
     const cpc = Number(editItem.costo_por_cabeza||0);
     const total = cabezas*cpc;
     const raza = editItem.raza==="Otra"?editItem.razaCustom:editItem.raza;
-    const row={rodeo:editItem.rodeo,campo:editItem.campo,lote:editItem.lote,tipo:editItem.tipo,raza,cabezas,costo_por_cabeza:cpc,costo:total,fecha:editItem.fecha||todayISO(),sociedad:editItem.sociedad||""};
+    const row={rodeo:editItem.rodeo,campo:editItem.campo,lote:editItem.lote,tipo:editItem.tipo,raza,cabezas,terneros:Number(editItem.terneros||0),terneras:Number(editItem.terneras||0),costo_por_cabeza:cpc,costo:total,fecha:editItem.fecha||todayISO(),sociedad:editItem.sociedad||""};
 
     const isEdit = !!editItem.id_real;
     let oldCosto = 0;
@@ -2150,7 +2150,15 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
                   <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{a.lote||"—"}</td>
                   <td style={{padding:"12px",fontSize:13}}>{a.tipo}</td>
                   <td style={{padding:"12px"}}><Badge label={a.raza}/></td>
-                  <td style={{padding:"12px",color:"#16a34a",fontWeight:800,fontSize:16}}>{a.cabezas}</td>
+                  <td style={{padding:"12px",color:"#16a34a",fontWeight:800,fontSize:16}}>
+                    {a.cabezas}
+                    {(Number(a.terneros||0)+Number(a.terneras||0))>0&&(
+                      <div style={{fontSize:11,fontWeight:600,color:"#a16207"}}>
+                        🐮 +{Number(a.terneros||0)+Number(a.terneras||0)} crías
+                        {Number(a.terneros||0)>0?` ${a.terneros}♂`:""}{Number(a.terneras||0)>0?` ${a.terneras}♀`:""}
+                      </div>
+                    )}
+                  </td>
                   {!sinGastos&&<td style={{padding:"12px",fontSize:13}}>{fmt(a.costo_por_cabeza||0)}</td>}
                   {!sinGastos&&<td style={{padding:"12px",fontSize:13,fontWeight:600}}>{fmtK(a.costo||0)}</td>}
                   <td style={{padding:"12px",fontSize:12}}>
@@ -2231,6 +2239,19 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
                 </div>
               </>
           }
+          {/* 🐮 Crías al pie de la madre (vacas paridas) */}
+          <div style={{background:"#fefce8",border:"1px solid #fef08a",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+            <div style={{fontSize:12,fontWeight:600,color:"#854d0e",marginBottom:8}}>🐮 Crías al pie (opcional) — para vacas paridas con sus terneros</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <Inp label="Terneros ♂" type="number" value={editItem.terneros||""} onChange={e=>setEditItem({...editItem,terneros:e.target.value})}/>
+              <Inp label="Terneras ♀" type="number" value={editItem.terneras||""} onChange={e=>setEditItem({...editItem,terneras:e.target.value})}/>
+            </div>
+            {(Number(editItem.terneros||0)+Number(editItem.terneras||0))>0&&(
+              <div style={{fontSize:12,color:"#854d0e",marginTop:4}}>
+                Total del rodeo: <b>{Number(editItem.cabezas||0)+Number(editItem.terneros||0)+Number(editItem.terneras||0)}</b> cabezas ({editItem.cabezas||0} {editItem.tipo} + {Number(editItem.terneros||0)+Number(editItem.terneras||0)} crías)
+              </div>
+            )}
+          </div>
           <Inp label="Fecha" type="date" value={editItem.fecha} onChange={e=>setEditItem({...editItem,fecha:e.target.value})}/>
           <Sel label="Sociedad" value={editItem.sociedad||""} onChange={e=>setEditItem({...editItem,sociedad:e.target.value})}>
             <option value="">— Sin asignar —</option>
@@ -2376,6 +2397,12 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
       if(error){toast(error.message,"error");return;}
       if(total>0){
         await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,monto:total,tc:tc||dolar,origen:"stock",origen_id:inserted.id});
+      }
+      // 📎 Archivar el remito del ingreso (si se adjuntó)
+      if(editItem.remito){
+        try{
+          await archivarComprobante(orgId,editItem.remito,{nombre:`Remito ${row.nombre} ${todayISO()}`,tag:"Remitos"});
+        }catch(err){ toast("Insumo agregado, pero falló subir el remito: "+err.message,"error"); }
       }
       toast("Insumo agregado");
     }
@@ -2690,6 +2717,14 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
           {editItem.id_real && editItem.sociedad && (
             <div style={{background:"#fffbeb",border:"1px solid #fde68a",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
               ℹ️ Al guardar, toda la cantidad ({Number(editItem.cantidad||0).toLocaleString("es-AR")} {editItem.unidad}) quedará asignada a <b>{editItem.sociedad}</b>.
+            </div>
+          )}
+          {/* 📎 Remito / factura del ingreso — se archiva en Documentos › Remitos */}
+          {!editItem.id_real && (
+            <div style={{marginBottom:14}}>
+              <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:5}}>📎 Remito / factura (opcional)</label>
+              <input type="file" accept="image/*,.pdf" onChange={e=>setEditItem({...editItem,remito:e.target.files[0]||null})} style={{fontSize:13}}/>
+              {editItem.remito&&<div style={{fontSize:12,color:"#15803d",marginTop:5}}>✓ {editItem.remito.name} — se guardará en Documentos › Remitos</div>}
             </div>
           )}
           <div style={{display:"flex",gap:10,marginTop:8}}>
