@@ -2056,9 +2056,15 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
     if(!cabezasMover || cabezasMover<=0 || cabezasMover>cabezasOrig){
       toast("Cantidad de cabezas inválida","error");return;
     }
+    // 🐮 Crías a mover (validadas contra lo disponible en el rodeo de origen)
+    const ternerosOrig = Number(t.original.terneros||0);
+    const ternerasOrig = Number(t.original.terneras||0);
+    const ternerosMover = Math.min(Number(t.terneros_a_mover||0), ternerosOrig);
+    const ternerasMover = Math.min(Number(t.terneras_a_mover||0), ternerasOrig);
+    const criasMover = ternerosMover+ternerasMover;
     const cpc = Number(t.original.costo_por_cabeza||0);
 
-    if(cabezasMover===cabezasOrig){
+    if(cabezasMover===cabezasOrig && ternerosMover===ternerosOrig && ternerasMover===ternerasOrig){
       const {error} = await sb.from("animales").update({
         campo:t.campo_destino,
         lote:t.lote_destino||"",
@@ -2066,7 +2072,7 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
       if(error){toast(error.message,"error");return;}
       await registrarMovimiento(orgId,{
         tipo:"transfer_rodeo",
-        descripcion:`Rodeo "${t.original.rodeo}" (${cabezasMover} ${t.original.tipo}) transferido completo`,
+        descripcion:`Rodeo "${t.original.rodeo}" (${cabezasMover} ${t.original.tipo}${criasMover>0?` + ${criasMover} crías`:""}) transferido completo`,
         campo_origen:t.original.campo,
         campo_destino:t.campo_destino,
         lote_origen:t.original.lote||null,
@@ -2080,6 +2086,8 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
       const cabezasQuedan = cabezasOrig - cabezasMover;
       const {error:e1} = await sb.from("animales").update({
         cabezas:cabezasQuedan,
+        terneros:ternerosOrig-ternerosMover,
+        terneras:ternerasOrig-ternerasMover,
         costo:cabezasQuedan*cpc,
       }).eq("id",t.original.id);
       if(e1){toast(e1.message,"error");return;}
@@ -2091,25 +2099,28 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
         tipo:t.original.tipo,
         raza:t.original.raza,
         cabezas:cabezasMover,
+        terneros:ternerosMover,
+        terneras:ternerasMover,
         costo_por_cabeza:cpc,
         costo:cabezasMover*cpc,
         fecha:t.original.fecha,
+        sociedad:t.original.sociedad||"",
         org_id:orgId,
       };
       const {error:e2} = await sb.from("animales").insert(nuevoRodeo);
       if(e2){toast(e2.message,"error");return;}
       await registrarMovimiento(orgId,{
         tipo:"transfer_rodeo",
-        descripcion:`${cabezasMover} ${t.original.tipo} del rodeo "${t.original.rodeo}" transferidos (parcial)`,
+        descripcion:`${cabezasMover} ${t.original.tipo}${criasMover>0?` + ${criasMover} crías`:""} del rodeo "${t.original.rodeo}" transferidos (parcial)`,
         campo_origen:t.original.campo,
         campo_destino:t.campo_destino,
         lote_origen:t.original.lote||null,
         lote_destino:t.lote_destino||null,
         cantidad:cabezasMover,
         unidad:"cabezas",
-        detalles:{rodeo:t.original.rodeo,tipo:t.original.tipo,raza:t.original.raza,parcial:true,quedan_en_origen:cabezasQuedan},
+        detalles:{rodeo:t.original.rodeo,tipo:t.original.tipo,raza:t.original.raza,parcial:true,quedan_en_origen:cabezasQuedan,crias_movidas:criasMover},
       });
-      toast(`${cabezasMover} cab. transferidas a ${t.campo_destino}`);
+      toast(`${cabezasMover} cab.${criasMover>0?` + ${criasMover} crías`:""} transferidas a ${t.campo_destino}`);
     }
     setTransferItem(null); reload();
   };
@@ -2179,6 +2190,8 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
                           campo_destino:"",
                           lote_destino:"",
                           cabezas_a_mover:a.cabezas,
+                          terneros_a_mover:Number(a.terneros||0),
+                          terneras_a_mover:Number(a.terneras||0),
                         })} title="Transferir a otro campo">🔄</Btn>
                       </EditOnly>
                       <EditBtn onClick={()=>{
@@ -2294,14 +2307,31 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
 
           <Inp label={`Cabezas a transferir (máximo ${transferItem.original.cabezas})`} type="number" value={transferItem.cabezas_a_mover} onChange={e=>setTransferItem({...transferItem,cabezas_a_mover:e.target.value})}/>
 
-          {Number(transferItem.cabezas_a_mover)<Number(transferItem.original.cabezas) && Number(transferItem.cabezas_a_mover)>0 && (
-            <div style={{background:"#fef9c3",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
-              ℹ️ Se moverán {transferItem.cabezas_a_mover} cab. al campo destino. Quedarán <b>{Number(transferItem.original.cabezas)-Number(transferItem.cabezas_a_mover||0)}</b> cab. en {transferItem.original.campo}.
+          {/* 🐮 Crías a mover (solo si el rodeo tiene crías) */}
+          {(Number(transferItem.original.terneros||0)+Number(transferItem.original.terneras||0))>0 && (
+            <div style={{background:"#fefce8",border:"1px solid #fef08a",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+              <div style={{fontSize:12,fontWeight:600,color:"#854d0e",marginBottom:8}}>🐮 Crías a mover con este grupo</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                {Number(transferItem.original.terneros||0)>0&&(
+                  <Inp label={`Terneros ♂ (máx ${transferItem.original.terneros})`} type="number" value={transferItem.terneros_a_mover} onChange={e=>setTransferItem({...transferItem,terneros_a_mover:e.target.value})}/>
+                )}
+                {Number(transferItem.original.terneras||0)>0&&(
+                  <Inp label={`Terneras ♀ (máx ${transferItem.original.terneras})`} type="number" value={transferItem.terneras_a_mover} onChange={e=>setTransferItem({...transferItem,terneras_a_mover:e.target.value})}/>
+                )}
+              </div>
             </div>
           )}
-          {Number(transferItem.cabezas_a_mover)===Number(transferItem.original.cabezas) && (
+
+          {Number(transferItem.cabezas_a_mover)<Number(transferItem.original.cabezas) && Number(transferItem.cabezas_a_mover)>0 && (
+            <div style={{background:"#fef9c3",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#92400e"}}>
+              ℹ️ Se moverán {transferItem.cabezas_a_mover} cab.{(Number(transferItem.terneros_a_mover||0)+Number(transferItem.terneras_a_mover||0))>0?` + ${Number(transferItem.terneros_a_mover||0)+Number(transferItem.terneras_a_mover||0)} crías`:""} al campo destino. Quedarán <b>{Number(transferItem.original.cabezas)-Number(transferItem.cabezas_a_mover||0)}</b> cab. en {transferItem.original.campo}.
+            </div>
+          )}
+          {Number(transferItem.cabezas_a_mover)===Number(transferItem.original.cabezas)
+            && Number(transferItem.terneros_a_mover||0)===Number(transferItem.original.terneros||0)
+            && Number(transferItem.terneras_a_mover||0)===Number(transferItem.original.terneras||0) && (
             <div style={{background:"#dcfce7",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#15803d"}}>
-              ✓ Se transferirá el rodeo completo.
+              ✓ Se transferirá el rodeo completo{(Number(transferItem.original.terneros||0)+Number(transferItem.original.terneras||0))>0?" con sus crías":""}.
             </div>
           )}
 
