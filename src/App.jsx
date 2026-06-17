@@ -282,6 +282,24 @@ const fmtK = n => {
 const fmtUSD = (n, dolar) => "U$ " + (Number(n||0)/dolar).toLocaleString("es-AR", {maximumFractionDigits:0});
 const todayISO = () => new Date().toISOString().split("T")[0];
 
+// 📎 Sube un remito/factura a Storage y lo archiva en Documentos.
+// Devuelve la URL pública o lanza error.
+async function archivarComprobante(orgId, file, { nombre, tag = "Remitos" } = {}) {
+  if (!file) return null;
+  const path = `${orgId}/${Date.now()}-${file.name}`;
+  const { error: upErr } = await sb.storage.from("documentos").upload(path, file);
+  if (upErr) throw upErr;
+  const { data: { publicUrl } } = sb.storage.from("documentos").getPublicUrl(path);
+  const tipo = /\.(xlsx|xls)$/i.test(file.name) ? "Excel"
+    : /\.pdf$/i.test(file.name) ? "PDF"
+    : /\.(jpe?g|png|gif|heic|webp)$/i.test(file.name) ? "Imagen" : "Archivo";
+  await sb.from("documentos").insert({
+    org_id: orgId, nombre: nombre || file.name, tipo,
+    size: `${(file.size / 1024).toFixed(0)} KB`, fecha: todayISO(), tag, url: publicUrl,
+  });
+  return publicUrl;
+}
+
 // Helper para registrar un movimiento en el historial
 async function registrarMovimiento(orgId, mov){
   try {
@@ -2399,6 +2417,12 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
     if(total>0){
       await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
     }
+    // 📎 Archivar el remito en Documentos (si se adjuntó)
+    if(comprarItem.remito){
+      try{
+        await archivarComprobante(orgId,comprarItem.remito,{nombre:`Remito ${comprarItem.item.nombre} ${fechaCompra}`,tag:"Remitos"});
+      }catch(err){ toast("Compra registrada, pero falló subir el remito: "+err.message,"error"); }
+    }
     toast(`+${cantNueva} ${comprarItem.item.unidad} de ${comprarItem.item.nombre} (${comprarItem.sociedad})`);
     setComprarItem(null); reload();
   };
@@ -2716,6 +2740,13 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
               🚚 Llega en {Math.round((new Date(comprarItem.fecha_llegada)-new Date(comprarItem.fecha))/(1000*60*60*24))} días desde la compra
             </div>
           )}
+
+          {/* 📎 Remito / factura — se archiva en Documentos › Remitos */}
+          <div style={{marginBottom:14}}>
+            <label style={{fontSize:13,fontWeight:600,display:"block",marginBottom:5}}>📎 Remito / factura (opcional)</label>
+            <input type="file" accept="image/*,.pdf" onChange={e=>setComprarItem({...comprarItem,remito:e.target.files[0]||null})} style={{fontSize:13}}/>
+            {comprarItem.remito&&<div style={{fontSize:12,color:"#15803d",marginTop:5}}>✓ {comprarItem.remito.name} — se guardará en Documentos › Remitos</div>}
+          </div>
 
           {!sinGastos&&<div style={{background:"#fef9c3",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
             Total compra: <b>{fmt(totalARS)}</b>
@@ -4704,39 +4735,67 @@ function HistorialPage({data,orgId,toast,reload}){
 // ════════════════════════════════════════════════════════════════════════════
 function ReportePage({data,orgId}){
   const now=new Date();
+  const [periodo,setPeriodo]=useState("mes"); // "semana" | "mes" | "anio"
   const [mesSel,setMesSel]=useState(now.getMonth());
   const [anioSel,setAnioSel]=useState(now.getFullYear());
+  const [semanaRef,setSemanaRef]=useState(todayISO()); // cualquier día de la semana elegida
   const [campoFil,setCampoFil]=useState("Todos los campos");
   const MESES=["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"];
   const esTodos=campoFil==="Todos los campos";
   const sinGastos=ocultaGastos(orgId);
 
-  const enMes=(fecha,m=mesSel,a=anioSel)=>{
-    if(!fecha)return false;
-    const d=new Date(fecha.length===10?fecha+"T12:00:00":fecha);
-    return d.getMonth()===m&&d.getFullYear()===a;
+  // ── Rango de fechas del período elegido ──
+  const calcRango=(p,{mes,anio,ref})=>{
+    if(p==="anio") return {desde:new Date(anio,0,1), hasta:new Date(anio,11,31)};
+    if(p==="mes")  return {desde:new Date(anio,mes,1), hasta:new Date(anio,mes+1,0)};
+    const d=new Date(ref+"T12:00:00");
+    const dow=(d.getDay()+6)%7; // 0=lunes
+    const lunes=new Date(d); lunes.setDate(d.getDate()-dow);
+    const domingo=new Date(lunes); domingo.setDate(lunes.getDate()+6);
+    return {desde:lunes, hasta:domingo};
   };
+  const rango=calcRango(periodo,{mes:mesSel,anio:anioSel,ref:semanaRef});
+  const rangoPrev=(()=>{
+    if(periodo==="anio") return calcRango("anio",{anio:anioSel-1});
+    if(periodo==="mes")  return calcRango("mes",{mes:mesSel===0?11:mesSel-1,anio:mesSel===0?anioSel-1:anioSel});
+    const d=new Date(semanaRef+"T12:00:00"); d.setDate(d.getDate()-7);
+    return calcRango("semana",{ref:d.toISOString().slice(0,10)});
+  })();
+  const enRango=(fecha,r=rango)=>{
+    if(!fecha) return false;
+    const f=new Date(fecha.length===10?fecha+"T12:00:00":fecha);
+    const fin=new Date(r.hasta.getFullYear(),r.hasta.getMonth(),r.hasta.getDate(),23,59,59);
+    return f>=r.desde && f<=fin;
+  };
+  const tituloPeriodo=(()=>{
+    if(periodo==="anio") return `Año ${anioSel}`;
+    if(periodo==="mes")  return `${MESES[mesSel]} ${anioSel}`;
+    return `Semana del ${rango.desde.toLocaleDateString("es-AR",{day:"numeric",month:"short"})} al ${rango.hasta.toLocaleDateString("es-AR",{day:"numeric",month:"short",year:"numeric"})}`;
+  })();
+  const labelPrev=periodo==="semana"?"semana anterior":periodo==="mes"?"mes anterior":"año anterior";
+  const labelActual=periodo==="semana"?"Semana":periodo==="mes"?"Mes":"Año";
+
   const filtra=arr=>(arr||[]).filter(x=>esTodos||x.campo===campoFil);
   const fmtMonto=v=>"$ "+Number(v||0).toLocaleString("es-AR",{maximumFractionDigits:0});
 
   // ── Lluvias ──
-  const lluviasMes=filtra(data.lluvias).filter(l=>enMes(l.fecha));
+  const lluviasMes=filtra(data.lluvias).filter(l=>enRango(l.fecha));
   const mmMes=lluviasMes.reduce((s,l)=>s+Number(l.mm||0),0);
   const mayorEvento=lluviasMes.length?Math.max(...lluviasMes.map(l=>Number(l.mm||0))):0;
-  const mmMismoMesAnt=filtra(data.lluvias).filter(l=>enMes(l.fecha,mesSel,anioSel-1)).reduce((s,l)=>s+Number(l.mm||0),0);
+  const mmPrev=filtra(data.lluvias).filter(l=>enRango(l.fecha,rangoPrev)).reduce((s,l)=>s+Number(l.mm||0),0);
+  // Acumulado del año hasta el fin del período (sólo tiene sentido en mes/año)
   const acumHasta=(a)=>filtra(data.lluvias).filter(l=>{
     if(!l.fecha)return false;
     const d=new Date(l.fecha+"T12:00:00");
-    return d.getFullYear()===a&&d.getMonth()<=mesSel;
+    return d.getFullYear()===a && d<=new Date(a,rango.hasta.getMonth(),rango.hasta.getDate(),23,59,59);
   }).reduce((s,l)=>s+Number(l.mm||0),0);
   const acumAnio=acumHasta(anioSel), acumAnioAnt=acumHasta(anioSel-1);
 
   // ── Gastos ──
-  const finMes=filtra(data.finanzas).filter(f=>enMes(f.fecha));
+  const finMes=filtra(data.finanzas).filter(f=>enRango(f.fecha));
   const egresosMes=finMes.filter(f=>f.tipo!=="Ingreso").reduce((s,f)=>s+Number(f.monto||0),0);
   const ingresosMes=finMes.filter(f=>f.tipo==="Ingreso").reduce((s,f)=>s+Number(f.monto||0),0);
-  const mesPrev=mesSel===0?{m:11,a:anioSel-1}:{m:mesSel-1,a:anioSel};
-  const egresosMesPrev=filtra(data.finanzas).filter(f=>enMes(f.fecha,mesPrev.m,mesPrev.a)&&f.tipo!=="Ingreso").reduce((s,f)=>s+Number(f.monto||0),0);
+  const egresosMesPrev=filtra(data.finanzas).filter(f=>enRango(f.fecha,rangoPrev)&&f.tipo!=="Ingreso").reduce((s,f)=>s+Number(f.monto||0),0);
   const porCategoria=Object.entries(
     finMes.filter(f=>f.tipo!=="Ingreso").reduce((acc,f)=>{
       const k=f.categoria||"Sin categoría";
@@ -4746,7 +4805,7 @@ function ReportePage({data,orgId}){
   ).sort((a,b)=>b[1]-a[1]);
 
   // ── Órdenes de trabajo ──
-  const ordMes=filtra(data.ordenes).filter(o=>enMes(o.fecha));
+  const ordMes=filtra(data.ordenes).filter(o=>enRango(o.fecha));
   const ordCompletadas=ordMes.filter(o=>o.estado==="Completada");
   const ordPendientes=filtra(data.ordenes).filter(o=>o.estado==="Pendiente");
 
@@ -4761,14 +4820,14 @@ function ReportePage({data,orgId}){
     },{})
   ).sort((a,b)=>b[1]-a[1]);
   const movsMes=(data.movimientos||[]).filter(mv=>
-    enMes(mv.fecha)&&(esTodos||mv.campo_origen===campoFil||mv.campo_destino===campoFil)
+    enRango(mv.fecha)&&(esTodos||mv.campo_origen===campoFil||mv.campo_destino===campoFil)
   );
 
   const hayDatos=lluviasMes.length||finMes.length||ordMes.length||movsMes.length;
 
   const imprimir=()=>{
     const t=document.title;
-    document.title=`Reporte ${MESES[mesSel]} ${anioSel} - Campo Manager`;
+    document.title=`Reporte ${tituloPeriodo} - Campo Manager`;
     window.print();
     document.title=t;
   };
@@ -4799,16 +4858,29 @@ function ReportePage({data,orgId}){
 
       {/* Controles (no salen en la impresión) */}
       <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+        {/* Selector de período */}
+        <div style={{display:"flex",borderRadius:8,overflow:"hidden",border:"1.5px solid #e5e7eb"}}>
+          {[["semana","Semanal"],["mes","Mensual"],["anio","Anual"]].map(([id,lbl])=>(
+            <button key={id} onClick={()=>setPeriodo(id)} style={{padding:"9px 16px",fontSize:13,fontWeight:600,border:"none",cursor:"pointer",background:periodo===id?"#16a34a":"#fff",color:periodo===id?"#fff":"#6b7280"}}>{lbl}</button>
+          ))}
+        </div>
         <select value={campoFil} onChange={e=>setCampoFil(e.target.value)} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
           <option>Todos los campos</option>
           {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
         </select>
-        <select value={mesSel} onChange={e=>setMesSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
-          {MESES.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
-        </select>
-        <select value={anioSel} onChange={e=>setAnioSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
-          {[anioSel+1,anioSel,anioSel-1,anioSel-2].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>b-a).map(a=><option key={a} value={a}>{a}</option>)}
-        </select>
+        {periodo==="semana"&&(
+          <input type="date" value={semanaRef} onChange={e=>e.target.value&&setSemanaRef(e.target.value)} style={{padding:"8px 12px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}} title="Elegí cualquier día de la semana a reportar"/>
+        )}
+        {periodo==="mes"&&(
+          <select value={mesSel} onChange={e=>setMesSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+            {MESES.map((mn,i)=><option key={i} value={i}>{mn}</option>)}
+          </select>
+        )}
+        {periodo!=="semana"&&(
+          <select value={anioSel} onChange={e=>setAnioSel(Number(e.target.value))} style={{padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"}}>
+            {[anioSel+1,anioSel,anioSel-1,anioSel-2].filter((v,i,a)=>a.indexOf(v)===i).sort((a,b)=>b-a).map(a=><option key={a} value={a}>{a}</option>)}
+          </select>
+        )}
         <Btn onClick={imprimir}>🖨️ Imprimir / Guardar PDF</Btn>
       </div>
 
@@ -4816,24 +4888,24 @@ function ReportePage({data,orgId}){
       <div id="reporte-print" style={{background:"#fff",borderRadius:14,padding:28,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",maxWidth:820}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",borderBottom:"3px solid #166534",paddingBottom:12,marginBottom:18,flexWrap:"wrap",gap:8}}>
           <div>
-            <div style={{fontSize:20,fontWeight:800,color:"#166534"}}>Reporte Mensual</div>
-            <div style={{fontSize:14,fontWeight:600}}>{MESES[mesSel]} {anioSel} · {campoFil}</div>
+            <div style={{fontSize:20,fontWeight:800,color:"#166534"}}>Reporte {labelActual==="Año"?"Anual":labelActual==="Mes"?"Mensual":"Semanal"}</div>
+            <div style={{fontSize:14,fontWeight:600}}>{tituloPeriodo} · {campoFil}</div>
           </div>
           <div style={{fontSize:11,color:"#9ca3af",textAlign:"right"}}>
             Campo Manager<br/>Generado el {new Date().toLocaleDateString("es-AR",{day:"numeric",month:"long",year:"numeric"})}
           </div>
         </div>
 
-        {!hayDatos&&<div style={{textAlign:"center",padding:"30px 0",color:"#9ca3af"}}>Sin actividad registrada en {MESES[mesSel]} {anioSel}.</div>}
+        {!hayDatos&&<div style={{textAlign:"center",padding:"30px 0",color:"#9ca3af"}}>Sin actividad registrada en este período.</div>}
 
         {/* Lluvias */}
         {(lluviasMes.length>0||acumAnio>0)&&(
           <Seccion titulo="🌧️ LLUVIAS">
             <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
-              <Dato label={`${MESES[mesSel]}`} value={`${mmMes} mm`} sub={`${lluviasMes.length} evento(s)`}/>
+              <Dato label={labelActual} value={`${mmMes} mm`} sub={`${lluviasMes.length} evento(s)`}/>
               <Dato label="Mayor evento" value={`${mayorEvento} mm`}/>
-              <Dato label={`${MESES[mesSel]} ${anioSel-1}`} value={`${mmMismoMesAnt} mm`} sub="mismo mes, año anterior"/>
-              <Dato label={`Acum. ${anioSel} (a ${MESES[mesSel].slice(0,3).toLowerCase()})`} value={`${acumAnio} mm`} sub={`vs ${acumAnioAnt} mm en ${anioSel-1}`}/>
+              <Dato label={labelPrev} value={`${mmPrev} mm`} sub={`${labelActual.toLowerCase()} anterior`}/>
+              {periodo!=="semana"&&<Dato label={`Acum. ${anioSel}`} value={`${acumAnio} mm`} sub={`vs ${acumAnioAnt} mm en ${anioSel-1}`}/>}
             </div>
             {lluviasMes.length>0&&(
               <table style={{width:"100%",borderCollapse:"collapse"}}>
@@ -4856,8 +4928,8 @@ function ReportePage({data,orgId}){
         {!sinGastos&&finMes.length>0&&(
           <Seccion titulo="💰 GASTOS E INGRESOS">
             <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
-              <Dato label="Egresos del mes" value={fmtMonto(egresosMes)} sub={egresosMesPrev>0?`mes anterior: ${fmtMonto(egresosMesPrev)}`:undefined}/>
-              {ingresosMes>0&&<Dato label="Ingresos del mes" value={fmtMonto(ingresosMes)}/>}
+              <Dato label="Egresos del período" value={fmtMonto(egresosMes)} sub={egresosMesPrev>0?`${labelPrev}: ${fmtMonto(egresosMesPrev)}`:undefined}/>
+              {ingresosMes>0&&<Dato label="Ingresos del período" value={fmtMonto(ingresosMes)}/>}
               <Dato label="Movimientos" value={finMes.length}/>
             </div>
             {porCategoria.length>0&&(
@@ -4925,7 +4997,7 @@ function ReportePage({data,orgId}){
         )}
 
         <div style={{borderTop:"1px solid #e5e7eb",paddingTop:8,fontSize:10,color:"#9ca3af",textAlign:"center"}}>
-          Reporte generado automáticamente por Campo Manager · {campoFil} · {MESES[mesSel]} {anioSel}
+          Reporte generado automáticamente por Campo Manager · {campoFil} · {tituloPeriodo}
         </div>
       </div>
     </div>
