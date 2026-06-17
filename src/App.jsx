@@ -187,7 +187,7 @@ const SENTINEL_CAPAS = [
 
 // 🆕 Campos (org) que NO ven la sección Gastos / dólar / precios.
 // Para ocultarlo en un campo, agregá su org_id a esta lista.
-const ORGS_SIN_GASTOS = ["75ec51bc-1569-495b-9df4-666bc4dc84ad"]; // Campo de Santiago (MARIA AMELIA)
+const ORGS_SIN_GASTOS = []; // (vacío = todos ven Gastos)
 const ocultaGastos = (orgId) => ORGS_SIN_GASTOS.includes(orgId);
 
 // 🆕 Logo de la marca (María Amelia) incrustado para no depender de archivos externos
@@ -3916,15 +3916,16 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   })();
 
   const save = async ()=>{
-    if(!editItem.concepto||!editItem.monto){toast("Faltan campos","error");return;}
+    if(!editItem.concepto){toast("Poné al menos el concepto","error");return;}
     const tc = Number(editItem.tc||0);
-    // 🆕 El monto se guarda SIEMPRE en ARS. Si cargó en USD, convierto con el tc.
+    // 🆕 El monto es OPCIONAL. Si se carga, se guarda SIEMPRE en ARS.
+    const montoIngresado = Number(editItem.monto||0);
     let montoARS;
-    if(editItem.moneda==="USD"){
+    if(montoIngresado>0 && editItem.moneda==="USD"){
       if(!tc){toast("Poné el tipo de cambio de la factura","error");return;}
-      montoARS = Number(editItem.monto)*tc;
+      montoARS = montoIngresado*tc;
     } else {
-      montoARS = Number(editItem.monto);
+      montoARS = montoIngresado; // 0 si no se cargó precio
     }
     const row={fecha:editItem.fecha,tipo:"Egreso",concepto:editItem.concepto,categoria:editItem.categoria,campo:editItem.campo,monto:montoARS,tc:tc||dolar};
     if(editItem.id){
@@ -4095,7 +4096,7 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
               <option value="ARS">Pesos (ARS)</option>
               <option value="USD">Dólares (USD)</option>
             </Sel>
-            <Inp label={editItem.moneda==="USD"?"Monto en USD":"Monto en ARS"} type="number" value={editItem.monto} onChange={e=>setEditItem({...editItem,monto:e.target.value})}/>
+            <Inp label={editItem.moneda==="USD"?"Monto en USD (opcional)":"Monto en ARS (opcional)"} type="number" value={editItem.monto} onChange={e=>setEditItem({...editItem,monto:e.target.value})}/>
           </div>
 
           {/* 🆕 Tipo de cambio de la factura */}
