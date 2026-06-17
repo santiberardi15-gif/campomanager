@@ -286,6 +286,30 @@ const todayISO = () => new Date().toISOString().split("T")[0];
 const cabezasTotales = a => Number(a.cabezas||0)+Number(a.terneros||0)+Number(a.terneras||0);
 const criasRodeo = a => Number(a.terneros||0)+Number(a.terneras||0);
 
+// Nombres de lote(s) de una orden de trabajo, resueltos desde lotes_ids
+function lotesDeOrden(orden, campos){
+  const campoObj = (campos||[]).find(c=>c.nombre===orden.campo);
+  return (orden.lotes_ids||[]).map(lid=>{
+    const l = (campoObj?.lotes_data||[]).find(x=>x.id===lid);
+    return l ? (l.nombre||`Lote ${l.numero}`) : null;
+  }).filter(Boolean);
+}
+
+// Registra el gasto del consumo de un insumo, repartiéndolo entre los lotes de
+// la orden (si tiene varios) para poder ver el costo por lote.
+async function gastoConsumoInsumo({orgId, fecha, stk, monto, orden, lotes, origen}){
+  const n = (lotes||[]).length;
+  const base = {org_id:orgId, fecha, tipo:"Egreso", categoria:"Compra insumos", campo:orden.campo, monto, origen, origen_id:orden.id};
+  if(n<=1){
+    await sb.from("finanzas").insert({...base, lote:n===1?lotes[0]:"", concepto:`Uso ${stk.nombre} en: ${orden.titulo}`});
+  } else {
+    const parte = monto/n; // reparto en partes iguales entre los lotes de la orden
+    for(const ln of lotes){
+      await sb.from("finanzas").insert({...base, lote:ln, monto:parte, concepto:`Uso ${stk.nombre} en: ${orden.titulo} (${ln})`});
+    }
+  }
+}
+
 // 📎 Sube un remito/factura a Storage y lo archiva en Documentos.
 // Devuelve la URL pública o lanza error.
 async function archivarComprobante(orgId, file, { nombre, tag = "Remitos" } = {}) {
@@ -2430,7 +2454,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
       const {data:inserted,error}=await sb.from("stock").insert({...row,org_id:orgId}).select().single();
       if(error){toast(error.message,"error");return;}
       if(total>0){
-        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,lote:editItem.lote||"",monto:total,tc:tc||dolar,origen:"stock",origen_id:inserted.id});
+        await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Compra inicial ${row.nombre} (${row.cantidad} ${row.unidad})${editItem.sociedad?` [${editItem.sociedad}]`:""}`,categoria:"Compra insumos",campo:row.ubicacion,monto:total,tc:tc||dolar,origen:"stock",origen_id:inserted.id});
       }
       // 📎 Archivar el remito del ingreso (si se adjuntó)
       if(editItem.remito){
@@ -2476,7 +2500,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
     const conceptoCompra = `Compra ${comprarItem.item.nombre} (+${cantNueva} ${comprarItem.item.unidad}) [${comprarItem.sociedad}]`+(fechaLlegada?` · llega ${fmtDate(fechaLlegada)}`:"");
     // 🆕 Solo registramos el gasto si se cargó un precio (total > 0)
     if(total>0){
-      await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,lote:comprarItem.lote||"",monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
+      await sb.from("finanzas").insert({org_id:orgId,fecha:fechaCompra,tipo:"Egreso",concepto:conceptoCompra,categoria:"Compra insumos",campo:comprarItem.item.ubicacion,monto:total,tc:tc||dolar,origen:"stock_compra",origen_id:comprarItem.item.id});
     }
     // 📎 Archivar el remito en Documentos (si se adjuntó)
     if(comprarItem.remito){
@@ -2716,19 +2740,12 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
                   <label style={{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:4}}>Ubicación (campo)</label>
                   <div style={{padding:"9px 12px",borderRadius:8,border:"1.5px solid #fef3c7",background:"#fffbeb",fontSize:13,color:"#92400e"}}>No hay campos ingresados</div>
                 </div>
-              : <Sel label="Ubicación (campo)" value={editItem.ubicacion} onChange={e=>setEditItem({...editItem,ubicacion:e.target.value,lote:""})}>
+              : <Sel label="Ubicación (campo)" value={editItem.ubicacion} onChange={e=>setEditItem({...editItem,ubicacion:e.target.value})}>
                   <option value="">Seleccionar...</option>
                   {data.campos.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
                 </Sel>
             }
           </div>
-          {/* 🌱 Atribuir el costo a un lote (opcional) — solo al crear */}
-          {!editItem.id_real && (data.campos.find(c=>c.nombre===editItem.ubicacion)?.lotes_data||[]).length>0 && (
-            <Sel label="Lote / Potrero (opcional — para costos por lote)" value={editItem.lote||""} onChange={e=>setEditItem({...editItem,lote:e.target.value})}>
-              <option value="">— Todo el campo —</option>
-              {(data.campos.find(c=>c.nombre===editItem.ubicacion)?.lotes_data||[]).map(l=><option key={l.id} value={l.nombre||`Lote ${l.numero}`}>{l.nombre||`Lote ${l.numero}`}{l.cultivo?` (${l.cultivo})`:""}</option>)}
-            </Sel>
-          )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
             <Inp label="Cantidad" type="number" value={editItem.cantidad} onChange={e=>setEditItem({...editItem,cantidad:e.target.value})}/>
             <Inp label="Stock mínimo" type="number" value={editItem.minimo} onChange={e=>setEditItem({...editItem,minimo:e.target.value})}/>
@@ -2781,8 +2798,6 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
         const costo = Number(comprarItem.costo_unit)||0;
         // total en ARS según moneda elegida
         const totalARS = comprarItem.moneda==="USD" ? cant*costo*(tc||0) : cant*costo;
-        const campoCompra = data.campos.find(c=>c.nombre===comprarItem.item.ubicacion);
-        const lotesCompra = campoCompra?.lotes_data||[];
         return(
         <Modal title={`Comprar ${comprarItem.item.nombre}`} onClose={()=>setComprarItem(null)}>
           <div style={{background:"#f0fdf4",borderRadius:8,padding:12,marginBottom:14,fontSize:13}}>
@@ -2817,14 +2832,6 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
             <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#1d4ed8"}}>
               🚚 Llega en {Math.round((new Date(comprarItem.fecha_llegada)-new Date(comprarItem.fecha))/(1000*60*60*24))} días desde la compra
             </div>
-          )}
-
-          {/* 🌱 Atribuir el costo a un lote (opcional) */}
-          {lotesCompra.length>0&&(
-            <Sel label="Lote / Potrero (opcional — para costos por lote)" value={comprarItem.lote||""} onChange={e=>setComprarItem({...comprarItem,lote:e.target.value})}>
-              <option value="">— Todo el campo —</option>
-              {lotesCompra.map(l=><option key={l.id} value={l.nombre||`Lote ${l.numero}`}>{l.nombre||`Lote ${l.numero}`}{l.cultivo?` (${l.cultivo})`:""}</option>)}
-            </Sel>
           )}
 
           {/* 📎 Remito / factura — se archiva en Documentos › Remitos */}
@@ -3707,19 +3714,20 @@ function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
   };
 
   const completarManual = async (orden)=>{
-    // Aplicar consumo de insumos y crear gastos
+    // El costo de los insumos usados se atribuye al/los lote(s) de la orden
+    const lotes = lotesDeOrden(orden, data.campos);
     for(const ins of (orden.insumos_usados||[])){
       const stk = data.stock.find(s=>s.id===ins.stock_id);
       if(stk){
         await sb.from("stock").update({cantidad:Math.max(0,Number(stk.cantidad)-Number(ins.cantidad))}).eq("id",stk.id);
         const monto = Number(ins.cantidad)*Number(stk.costo_unit||0);
         if(monto>0){
-          await sb.from("finanzas").insert({org_id:orgId,fecha:todayISO(),tipo:"Egreso",concepto:`Uso ${stk.nombre} en: ${orden.titulo}`,categoria:"Compra insumos",campo:orden.campo,monto,origen:"orden",origen_id:orden.id});
+          await gastoConsumoInsumo({orgId,fecha:todayISO(),stk,monto,orden,lotes,origen:"orden"});
         }
       }
     }
     await sb.from("ordenes").update({estado:"Completada",insumos_aplicados:true}).eq("id",orden.id);
-    toast("Orden completada y stock descontado");
+    toast(lotes.length?`Orden completada · costo imputado a ${lotes.join(", ")}`:"Orden completada y stock descontado");
     reload();
   };
 
@@ -5213,13 +5221,14 @@ export default function App(){
     const today = todayISO();
     const pending = (newData.ordenes||[]).filter(o=>o.estado==="Pendiente"&&o.fecha&&o.fecha<=today&&!o.insumos_aplicados);
     for(const o of pending){
+      const lotesO = lotesDeOrden(o, newData.campos);
       for(const ins of (o.insumos_usados||[])){
         const stk = newData.stock.find(s=>s.id===ins.stock_id);
         if(stk){
           await sb.from("stock").update({cantidad:Math.max(0,Number(stk.cantidad)-Number(ins.cantidad))}).eq("id",stk.id);
           const monto = Number(ins.cantidad)*Number(stk.costo_unit||0);
           if(monto>0){
-            await sb.from("finanzas").insert({org_id:orgId,fecha:today,tipo:"Egreso",concepto:`Auto: ${stk.nombre} usado en "${o.titulo}"`,categoria:"Compra insumos",campo:o.campo,monto,origen:"orden_auto",origen_id:o.id});
+            await gastoConsumoInsumo({orgId,fecha:today,stk,monto,orden:o,lotes:lotesO,origen:"orden_auto"});
           }
         }
       }
