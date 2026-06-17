@@ -282,6 +282,10 @@ const fmtK = n => {
 const fmtUSD = (n, dolar) => "U$ " + (Number(n||0)/dolar).toLocaleString("es-AR", {maximumFractionDigits:0});
 const todayISO = () => new Date().toISOString().split("T")[0];
 
+// Total de cabezas de un rodeo incluyendo crías al pie (terneros + terneras)
+const cabezasTotales = a => Number(a.cabezas||0)+Number(a.terneros||0)+Number(a.terneras||0);
+const criasRodeo = a => Number(a.terneros||0)+Number(a.terneras||0);
+
 // 📎 Sube un remito/factura a Storage y lo archiva en Documentos.
 // Devuelve la URL pública o lanza error.
 async function archivarComprobante(orgId, file, { nombre, tag = "Remitos" } = {}) {
@@ -602,7 +606,7 @@ function ResumenPage({data,dolar,setPage,sinGastos}){
   const ordenes  = campoFil==="Todos"?data.ordenes:data.ordenes.filter(o=>o.campo===campoFil);
 
   const totalHa = campos.reduce((s,c)=>s+Number(c.hectareas||0),0);
-  const totalCab = animales.reduce((s,a)=>s+Number(a.cabezas||0),0);
+  const totalCab = animales.reduce((s,a)=>s+cabezasTotales(a),0);
   const egresos = finanzas.reduce((s,f)=>s+Number(f.monto||0),0);
   const bajStock = data.stock.filter(s=>Number(s.cantidad)<Number(s.minimo)).length;
 
@@ -825,7 +829,7 @@ function CamposPage({data,orgId,toast,reload,modalReq,clearModal}){
             <KPI label="Lotes" value={detail.lotes||0}/>
             <KPI label="Lluvia acumulada" value={`${acumLluvia} mm`} color="#3b82f6"/>
             <KPI label="Campañas" value={campanasCampo.length}/>
-            <KPI label="Animales" value={animalesCampo.reduce((s,a)=>s+Number(a.cabezas||0),0)}/>
+            <KPI label="Animales" value={animalesCampo.reduce((s,a)=>s+cabezasTotales(a),0)}/>
           </div>
           {detail.notas&&<div style={{background:"#f9fafb",borderRadius:10,padding:"12px 16px",marginBottom:16,fontSize:14,color:"#374151"}}>📝 {detail.notas}</div>}
           <MapEmbed ubicacion={detail.ubicacion} height={300}/>
@@ -2114,8 +2118,8 @@ function AnimalesPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGast
     <div>
       <div style={{display:"flex",gap:12,marginBottom:16,flexWrap:"wrap"}}>
         <KPI label="Rodeos" value={filtered.length}/>
-        <KPI label="Cabezas" value={filtered.reduce((s,a)=>s+Number(a.cabezas||0),0).toLocaleString("es-AR")} color="#16a34a"/>
-        <KPI label="Promedio/rodeo" value={filtered.length?Math.round(filtered.reduce((s,a)=>s+Number(a.cabezas||0),0)/filtered.length):0}/>
+        <KPI label="Cabezas" value={filtered.reduce((s,a)=>s+cabezasTotales(a),0).toLocaleString("es-AR")} color="#16a34a" sub={filtered.reduce((s,a)=>s+criasRodeo(a),0)>0?`incluye ${filtered.reduce((s,a)=>s+criasRodeo(a),0)} crías`:undefined}/>
+        <KPI label="Promedio/rodeo" value={filtered.length?Math.round(filtered.reduce((s,a)=>s+cabezasTotales(a),0)/filtered.length):0}/>
         {!sinGastos&&<KPI label="Valor total" value={fmtK(filtered.reduce((s,a)=>s+Number(a.costo||0),0))}/>}
       </div>
 
@@ -4846,11 +4850,15 @@ function ReportePage({data,orgId}){
 
   // ── Hacienda ──
   const animalesFil=filtra(data.animales);
-  const totalCabezas=animalesFil.reduce((s,a)=>s+Number(a.cabezas||0),0);
+  const totalCabezas=animalesFil.reduce((s,a)=>s+cabezasTotales(a),0);
+  const totalCrias=animalesFil.reduce((s,a)=>s+criasRodeo(a),0);
   const cabezasPorTipo=Object.entries(
     animalesFil.reduce((acc,a)=>{
       const k=a.tipo||"Sin categoría";
       acc[k]=(acc[k]||0)+Number(a.cabezas||0);
+      const tt=Number(a.terneros||0), th=Number(a.terneras||0);
+      if(tt>0) acc["terneros"]=(acc["terneros"]||0)+tt;
+      if(th>0) acc["terneras"]=(acc["terneras"]||0)+th;
       return acc;
     },{})
   ).sort((a,b)=>b[1]-a[1]);
@@ -5012,8 +5020,8 @@ function ReportePage({data,orgId}){
         {(totalCabezas>0||movsMes.length>0)&&(
           <Seccion titulo="🐄 HACIENDA">
             <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:8}}>
-              <Dato label="Cabezas actuales" value={totalCabezas.toLocaleString("es-AR")} sub="al día de hoy"/>
-              {cabezasPorTipo.slice(0,4).map(([tipo,cab])=><Dato key={tipo} label={tipo} value={cab.toLocaleString("es-AR")}/>)}
+              <Dato label="Cabezas actuales" value={totalCabezas.toLocaleString("es-AR")} sub={totalCrias>0?`incluye ${totalCrias} crías`:"al día de hoy"}/>
+              {cabezasPorTipo.slice(0,5).map(([tipo,cab])=><Dato key={tipo} label={tipo} value={cab.toLocaleString("es-AR")}/>)}
             </div>
             {movsMes.length>0&&(
               <table style={{width:"100%",borderCollapse:"collapse"}}>
