@@ -5121,6 +5121,9 @@ function _parseMonto(s){
   const n=parseFloat(t);
   return isNaN(n)?0:n;
 }
+// Normaliza nombres para emparejar (minúsculas, sin acentos, espacios colapsados)
+const _norm = s => String(s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\s+/g," ").trim();
+
 // 🌾 Lee el texto pegado del Excel de granos y devuelve { nombreLote: $total } sumando repetidos.
 function _parseVentasGranos(texto, mapaLotes){
   const acc={};
@@ -5128,7 +5131,7 @@ function _parseVentasGranos(texto, mapaLotes){
     const cells=line.split("\t").map(c=>c.trim());
     if(cells.length<2) return;
     const nombre=cells[0];
-    if(!nombre || !mapaLotes.has(nombre.toLowerCase())) return;
+    if(!nombre || !mapaLotes.has(_norm(nombre))) return;
     // El $ Ingresado es la ÚLTIMA columna: tomamos la última celda no vacía.
     let monto=0;
     for(let i=cells.length-1;i>=1;i--){ if(cells[i]!==""){ monto=_parseMonto(cells[i]); break; } }
@@ -5150,7 +5153,7 @@ function CostosLotePage({data,orgId,reload,toast}){
     const mapa=new Map();
     data.campos.forEach(c=>(c.lotes_data||[]).forEach(l=>{
       const nombre=l.nombre||`Lote ${l.numero}`;
-      mapa.set(nombre.toLowerCase(),{campo:c.nombre,nombre});
+      mapa.set(_norm(nombre),{campo:c.nombre,nombre});
     }));
     const acc=_parseVentasGranos(importText,mapa);
     const entries=Object.entries(acc);
@@ -5158,7 +5161,7 @@ function CostosLotePage({data,orgId,reload,toast}){
     setImportando(true);
     await sb.from("finanzas").delete().eq("org_id",orgId).eq("origen","grano");
     const rows=entries.map(([nombre,monto])=>{
-      const hit=mapa.get(nombre.toLowerCase());
+      const hit=mapa.get(_norm(nombre));
       return {org_id:orgId,fecha:todayISO(),tipo:"Ingreso",concepto:`Venta granos - ${nombre}`,categoria:"Venta granos",campo:hit.campo,lote:nombre,monto,origen:"grano"};
     });
     const {error}=await sb.from("finanzas").insert(rows);
