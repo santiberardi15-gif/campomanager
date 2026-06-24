@@ -3608,14 +3608,27 @@ function CampanasPage({data,orgId,toast,reload,modalReq,clearModal}){
         return(
         <Modal title={editItem.id?"Editar Campaña":"Nueva Campaña"} onClose={()=>setEditItem(null)}>
           <Inp label="Nombre" value={editItem.nombre} onChange={e=>setEditItem({...editItem,nombre:e.target.value})} placeholder="Ej: Soja 26/27"/>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-            <Sel label="Cultivo" value={editItem.cultivo} onChange={e=>setEditItem({...editItem,cultivo:e.target.value})}>
-              {["Soja","Maíz","Trigo","Girasol","Sorgo"].map(c=><option key={c}>{c}</option>)}
-            </Sel>
-            <Sel label="Estado" value={editItem.estado} onChange={e=>setEditItem({...editItem,estado:e.target.value})}>
-              {["Activa","Cerrada"].map(s=><option key={s}>{s}</option>)}
-            </Sel>
+          <div style={{marginBottom:14}}>
+            <label style={{display:"block",fontSize:13,fontWeight:600,color:"#374151",marginBottom:6}}>Cultivo(s) — podés elegir varios (rotación)</label>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {["Trigo","Soja","Soja 2da","Maíz","Maíz 2da","Girasol","Sorgo"].map(c=>{
+                const arr=(editItem.cultivo||"").split("/").map(x=>x.trim()).filter(Boolean);
+                const on=arr.includes(c);
+                return(
+                  <button key={c} type="button" onClick={()=>{
+                    const next=on?arr.filter(x=>x!==c):[...arr,c];
+                    setEditItem({...editItem,cultivo:next.join(" / ")});
+                  }} style={{padding:"6px 12px",borderRadius:20,border:"1.5px solid",borderColor:on?"#16a34a":"#e5e7eb",background:on?"#16a34a22":"#fff",color:on?"#15803d":"#6b7280",cursor:"pointer",fontSize:12,fontWeight:600}}>
+                    {on?"✓ ":""}{c}
+                  </button>
+                );
+              })}
+            </div>
+            {(editItem.cultivo||"").includes("/")&&<div style={{fontSize:11,color:"#16a34a",marginTop:6,fontWeight:600}}>🔁 Rotación: {editItem.cultivo}</div>}
           </div>
+          <Sel label="Estado" value={editItem.estado} onChange={e=>setEditItem({...editItem,estado:e.target.value})}>
+            {["Activa","Cerrada"].map(s=><option key={s}>{s}</option>)}
+          </Sel>
           <Sel label="Campo" value={editItem.campo} onChange={e=>setEditItem({...editItem,campo:e.target.value,lotes_ids:[]})}>
             <option value="">Seleccionar...</option>
             {data.campos.map(c=><option key={c.id} value={c.nombre}>{c.nombre}</option>)}
