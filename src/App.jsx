@@ -5124,20 +5124,23 @@ function _parseMonto(s){
 // Normaliza nombres para emparejar (minúsculas, sin acentos, espacios colapsados)
 const _norm = s => String(s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/\s+/g," ").trim();
 
-// 🌾 Lee el texto pegado del Excel de granos y devuelve { nombreLote: $total } sumando repetidos.
+// 🌾 Lee el texto pegado del Excel de granos. Devuelve {acc:{lote:$}, noRec:[nombres no reconocidos]}.
 function _parseVentasGranos(texto, mapaLotes){
-  const acc={};
+  const acc={}, noRec=[];
+  const SALTAR=/^(lote|cultivo|subtotal|total|don ricardo|juliana|mar[ií]a rosa|soja|ma[ií]z|trigo|producci|rinde|venta)/i;
   String(texto||"").split(/\r?\n/).forEach(line=>{
     const cells=line.split("\t").map(c=>c.trim());
     if(cells.length<2) return;
     const nombre=cells[0];
-    if(!nombre || !mapaLotes.has(_norm(nombre))) return;
+    if(!nombre || SALTAR.test(nombre)) return;
     // El $ Ingresado es la ÚLTIMA columna: tomamos la última celda no vacía.
     let monto=0;
     for(let i=cells.length-1;i>=1;i--){ if(cells[i]!==""){ monto=_parseMonto(cells[i]); break; } }
-    if(monto>0) acc[nombre]=(acc[nombre]||0)+monto;
+    if(monto<=0) return; // sin venta o no es fila de datos
+    if(mapaLotes.has(_norm(nombre))) acc[nombre]=(acc[nombre]||0)+monto;
+    else noRec.push(nombre);
   });
-  return acc;
+  return {acc, noRec};
 }
 
 function CostosLotePage({data,orgId,reload,toast}){
@@ -5155,9 +5158,12 @@ function CostosLotePage({data,orgId,reload,toast}){
       const nombre=l.nombre||`Lote ${l.numero}`;
       mapa.set(_norm(nombre),{campo:c.nombre,nombre});
     }));
-    const acc=_parseVentasGranos(importText,mapa);
+    const {acc,noRec}=_parseVentasGranos(importText,mapa);
     const entries=Object.entries(acc);
-    if(entries.length===0){toast("No reconocí ningún lote. Copiá la tabla del Excel con los nombres de lote y el $ ingresado.","error");return;}
+    if(entries.length===0){
+      toast(noRec.length?`No coincidió ningún lote. No reconocidos: ${noRec.join(", ")}`:"No reconocí ningún lote. Copiá la tabla del Excel con los nombres de lote y el $ ingresado.","error");
+      return;
+    }
     setImportando(true);
     await sb.from("finanzas").delete().eq("org_id",orgId).eq("origen","grano");
     const rows=entries.map(([nombre,monto])=>{
@@ -5167,7 +5173,7 @@ function CostosLotePage({data,orgId,reload,toast}){
     const {error}=await sb.from("finanzas").insert(rows);
     setImportando(false);
     if(error){toast(error.message,"error");return;}
-    toast(`✅ ${rows.length} lote(s) con ventas importadas`);
+    toast(`✅ ${rows.length} lote(s) importados.`+(noRec.length?` ⚠️ No reconocidos: ${noRec.join(", ")}`:""));
     setImportOpen(false); setImportText("");
     reload();
   };
