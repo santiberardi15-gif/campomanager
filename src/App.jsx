@@ -5115,10 +5115,58 @@ function ReportePage({data,orgId}){
 // ════════════════════════════════════════════════════════════════════════════
 // 🌱 COSTOS POR LOTE — cuánto se gastó (e ingresó) en cada potrero
 // ════════════════════════════════════════════════════════════════════════════
-function CostosLotePage({data,orgId}){
+// 🌾 Parsea $ tipo "$ 1.234.567" → 1234567 (formato es-AR: punto miles, coma decimal)
+function _parseMonto(s){
+  const t=String(s).replace(/[^\d.,]/g,"").replace(/\./g,"").replace(",",".");
+  const n=parseFloat(t);
+  return isNaN(n)?0:n;
+}
+// 🌾 Lee el texto pegado del Excel de granos y devuelve { nombreLote: $total } sumando repetidos.
+function _parseVentasGranos(texto, mapaLotes){
+  const acc={};
+  String(texto||"").split(/\r?\n/).forEach(line=>{
+    const cells=line.split("\t").map(c=>c.trim());
+    if(cells.length<2) return;
+    const nombre=cells[0];
+    if(!nombre || !mapaLotes.has(nombre.toLowerCase())) return;
+    let monto=0;
+    for(let i=cells.length-1;i>=1;i--){ const v=_parseMonto(cells[i]); if(v>0){monto=v;break;} }
+    if(monto>0) acc[nombre]=(acc[nombre]||0)+monto;
+  });
+  return acc;
+}
+
+function CostosLotePage({data,orgId,reload,toast}){
   const camposConLotes=data.campos.filter(c=>(c.lotes_data||[]).length>0);
   const [campoFil,setCampoFil]=useState(camposConLotes[0]?.nombre||"");
   const [anioFil,setAnioFil]=useState("Todos");
+  const [importOpen,setImportOpen]=useState(false);
+  const [importText,setImportText]=useState("");
+  const [importando,setImportando]=useState(false);
+
+  // 🌾 Importar ventas de granos (pegadas del Excel) como Ingresos por lote
+  const importarGranos=async()=>{
+    const mapa=new Map();
+    data.campos.forEach(c=>(c.lotes_data||[]).forEach(l=>{
+      const nombre=l.nombre||`Lote ${l.numero}`;
+      mapa.set(nombre.toLowerCase(),{campo:c.nombre,nombre});
+    }));
+    const acc=_parseVentasGranos(importText,mapa);
+    const entries=Object.entries(acc);
+    if(entries.length===0){toast("No reconocí ningún lote. Copiá la tabla del Excel con los nombres de lote y el $ ingresado.","error");return;}
+    setImportando(true);
+    await sb.from("finanzas").delete().eq("org_id",orgId).eq("origen","grano");
+    const rows=entries.map(([nombre,monto])=>{
+      const hit=mapa.get(nombre.toLowerCase());
+      return {org_id:orgId,fecha:todayISO(),tipo:"Ingreso",concepto:`Venta granos - ${nombre}`,categoria:"Venta granos",campo:hit.campo,lote:nombre,monto,origen:"grano"};
+    });
+    const {error}=await sb.from("finanzas").insert(rows);
+    setImportando(false);
+    if(error){toast(error.message,"error");return;}
+    toast(`✅ ${rows.length} lote(s) con ventas importadas`);
+    setImportOpen(false); setImportText("");
+    reload();
+  };
 
   const anios=[...new Set(data.finanzas.map(f=>f.fecha&&new Date(f.fecha+"T12:00:00").getFullYear()).filter(Boolean))].sort((a,b)=>b-a);
 
@@ -5156,6 +5204,7 @@ function CostosLotePage({data,orgId}){
           <option>Todos</option>
           {anios.map(a=><option key={a} value={a}>{a}</option>)}
         </select>
+        <Btn variant="secondary" small onClick={()=>setImportOpen(true)}>🌾 Pegar ventas de granos</Btn>
       </div>
 
       {!campoFil ? (
@@ -5215,6 +5264,27 @@ function CostosLotePage({data,orgId}){
             </div>
           </div>
         </>
+      )}
+
+      {importOpen&&(
+        <Modal title="🌾 Pegar ventas de granos" onClose={()=>setImportOpen(false)} wide>
+          <div style={{fontSize:13,color:"#374151",marginBottom:10,lineHeight:1.5}}>
+            En tu Excel de granos, andá a la tabla <b>"PRODUCCIÓN Y RINDE POR LOTE"</b>, seleccioná las filas (con los nombres de lote y la columna <b>$ Ingresado</b>) y copialas. Después pegá acá abajo y dale <b>Importar</b>.
+          </div>
+          <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"8px 12px",marginBottom:10,fontSize:12,color:"#1d4ed8"}}>
+            💡 Toma el nombre del lote (1ª columna) y el <b>$</b> de cada fila. Cada lote se carga como <b>ingreso</b> de su campo. Importar de nuevo <b>reemplaza</b> lo anterior (no duplica).
+          </div>
+          <textarea
+            value={importText}
+            onChange={e=>setImportText(e.target.value)}
+            placeholder={"Pegá acá las filas del Excel...\nEj:\nEl Chueco\t...\t$ 179.909.880\nLa Salida\t...\t$ 178.995.960"}
+            style={{width:"100%",height:180,padding:10,borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:13,fontFamily:"monospace",boxSizing:"border-box",resize:"vertical"}}
+          />
+          <div style={{display:"flex",gap:10,marginTop:12}}>
+            <Btn variant="secondary" onClick={()=>setImportOpen(false)} full>Cancelar</Btn>
+            <Btn variant="primary" onClick={importarGranos} full disabled={importando}>{importando?"Importando...":"Importar"}</Btn>
+          </div>
+        </Modal>
       )}
     </div>
   );
