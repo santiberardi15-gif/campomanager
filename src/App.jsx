@@ -5301,6 +5301,141 @@ function CostosLotePage({data,orgId,reload,toast}){
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// 🥧 FACTURACIÓN — torta de ingresos por rubro (agricultura / ganadería)
+// ════════════════════════════════════════════════════════════════════════════
+const RUBRO_COLORES={Agricultura:"#16a34a","Ganadería":"#a16207",Tambo:"#3b82f6",Otros:"#9ca3af"};
+function _rubroDe(f){
+  const c=(f.categoria||"").toLowerCase(), o=String(f.origen||"").toLowerCase();
+  if(o==="grano"||c.includes("grano"))return"Agricultura";
+  if(c.includes("hacienda")||o.includes("animal"))return"Ganadería";
+  return"Otros";
+}
+
+function FacturacionPage({data,orgId,reload,toast}){
+  const [anioFil,setAnioFil]=useState("Todos");
+  const [sel,setSel]=useState(null);
+  const [modal,setModal]=useState(null);
+
+  const anios=[...new Set(data.finanzas.filter(f=>f.tipo==="Ingreso").map(f=>f.fecha&&new Date(f.fecha+"T12:00:00").getFullYear()).filter(Boolean))].sort((a,b)=>b-a);
+  const enAnio=f=>anioFil==="Todos"||(f.fecha&&new Date(f.fecha+"T12:00:00").getFullYear()===Number(anioFil));
+  const ingresos=data.finanzas.filter(f=>f.tipo==="Ingreso"&&enAnio(f));
+
+  const porRubro={};
+  ingresos.forEach(f=>{const r=_rubroDe(f);porRubro[r]=(porRubro[r]||0)+Number(f.monto||0);});
+  const total=Object.values(porRubro).reduce((s,v)=>s+v,0);
+  const pieData=Object.entries(porRubro).map(([name,value])=>({name,value})).sort((a,b)=>b.value-a.value);
+
+  const detalle=(()=>{
+    if(!sel)return[];
+    const m={};
+    ingresos.filter(f=>_rubroDe(f)===sel).forEach(f=>{const k=f.lote||f.concepto||f.campo||"(sin detalle)";m[k]=(m[k]||0)+Number(f.monto||0);});
+    return Object.entries(m).map(([k,v])=>({k,v})).sort((a,b)=>b.v-a.v);
+  })();
+  const totalSel=sel?(porRubro[sel]||0):0;
+  const maxDet=detalle.length?detalle[0].v:1;
+
+  const guardar=async()=>{
+    if(!modal.monto||Number(modal.monto)<=0){toast("Poné un monto","error");return;}
+    const cat=modal.rubro==="Agricultura"?"Venta granos":"Venta hacienda";
+    const {error}=await sb.from("finanzas").insert({org_id:orgId,fecha:modal.fecha||todayISO(),tipo:"Ingreso",concepto:modal.concepto||modal.rubro,categoria:cat,campo:modal.campo||"",monto:Number(modal.monto),origen:"facturacion"});
+    if(error){toast(error.message,"error");return;}
+    toast("Facturación registrada");setModal(null);reload();
+  };
+
+  const selStyle={padding:"9px 14px",borderRadius:8,border:"1.5px solid #e5e7eb",fontSize:14,background:"#fff"};
+  const cardStyle={background:"#fff",borderRadius:14,padding:20,boxShadow:"0 1px 4px rgba(0,0,0,0.07)",flex:"1 1 360px",minWidth:320};
+
+  return(
+    <div>
+      <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+        <select value={anioFil} onChange={e=>setAnioFil(e.target.value)} style={selStyle}>
+          <option>Todos</option>
+          {anios.map(a=><option key={a} value={a}>{a}</option>)}
+        </select>
+        <Btn small onClick={()=>setModal({rubro:"Ganadería",fecha:todayISO(),campo:"",concepto:"",monto:""})}>➕ Registrar facturación</Btn>
+      </div>
+
+      {total===0?(
+        <div style={{background:"#fff",borderRadius:14,padding:30,textAlign:"center",color:"#9ca3af"}}>
+          Todavía no hay facturación cargada. Importá ventas de granos (en Costos x Lote) o registrá una venta con el botón de arriba.
+        </div>
+      ):(
+        <div style={{display:"flex",gap:16,flexWrap:"wrap"}}>
+          <div style={cardStyle}>
+            <div style={{fontWeight:700,marginBottom:8}}>Facturación total {anioFil!=="Todos"?`· ${anioFil}`:""}</div>
+            <div style={{position:"relative"}}>
+              <ResponsiveContainer width="100%" height={300}>
+                <PieChart>
+                  <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={80} outerRadius={120} paddingAngle={2} onClick={d=>setSel(s=>s===d.name?null:d.name)}>
+                    {pieData.map((e,i)=><Cell key={i} fill={RUBRO_COLORES[e.name]||"#9ca3af"} stroke={sel===e.name?"#111827":"#fff"} strokeWidth={sel===e.name?3:1} style={{cursor:"pointer"}}/>)}
+                  </Pie>
+                  <Tooltip formatter={v=>fmt(v)}/>
+                </PieChart>
+              </ResponsiveContainer>
+              <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",textAlign:"center",pointerEvents:"none"}}>
+                <div style={{fontSize:11,color:"#6b7280",fontWeight:700}}>TOTAL</div>
+                <div style={{fontSize:22,fontWeight:800}}>{fmtK(total)}</div>
+              </div>
+            </div>
+            <div style={{marginTop:10}}>
+              {pieData.map(e=>(
+                <div key={e.name} onClick={()=>setSel(s=>s===e.name?null:e.name)} style={{display:"flex",alignItems:"center",gap:8,padding:"7px 8px",borderRadius:8,cursor:"pointer",background:sel===e.name?"#f9fafb":"transparent"}}>
+                  <div style={{width:12,height:12,borderRadius:3,background:RUBRO_COLORES[e.name]||"#9ca3af"}}/>
+                  <span style={{flex:1,fontSize:13,fontWeight:600}}>{e.name}</span>
+                  <span style={{fontSize:13,fontWeight:700}}>{fmtK(e.value)}</span>
+                  <span style={{fontSize:12,color:"#6b7280",width:46,textAlign:"right"}}>{total>0?Math.round(e.value/total*100):0}%</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div style={cardStyle}>
+            {!sel?(
+              <div style={{color:"#9ca3af",textAlign:"center",padding:"50px 10px",fontSize:14}}>👈 Tocá un rubro (en la torta o la lista) para ver de dónde viene esa facturación.</div>
+            ):(
+              <>
+                <div style={{fontWeight:700,marginBottom:2}}>{sel} — {fmtK(totalSel)}</div>
+                <div style={{fontSize:12,color:"#6b7280",marginBottom:14}}>De dónde viene (mayor a menor)</div>
+                {detalle.map(d=>(
+                  <div key={d.k} style={{marginBottom:9}}>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:13,marginBottom:3}}>
+                      <span style={{fontWeight:600}}>{d.k}</span><span style={{fontWeight:700}}>{fmtK(d.v)}</span>
+                    </div>
+                    <div style={{height:7,borderRadius:4,background:"#f3f4f6"}}>
+                      <div style={{height:7,borderRadius:4,width:`${Math.round(d.v/maxDet*100)}%`,minWidth:6,background:RUBRO_COLORES[sel]||"#9ca3af"}}/>
+                    </div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {modal&&(
+        <Modal title="➕ Registrar facturación" onClose={()=>setModal(null)}>
+          <Sel label="Rubro" value={modal.rubro} onChange={e=>setModal({...modal,rubro:e.target.value})}>
+            <option>Agricultura</option>
+            <option>Ganadería</option>
+          </Sel>
+          <Inp label="Fecha" type="date" value={modal.fecha} onChange={e=>setModal({...modal,fecha:e.target.value})}/>
+          <Sel label="Campo (opcional)" value={modal.campo} onChange={e=>setModal({...modal,campo:e.target.value})}>
+            <option value="">— Sin campo —</option>
+            {data.campos.map(c=><option key={c.id}>{c.nombre}</option>)}
+          </Sel>
+          <Inp label="Concepto" value={modal.concepto} onChange={e=>setModal({...modal,concepto:e.target.value})} placeholder="Ej: Venta novillos, vaca conserva, lote de soja..."/>
+          <Inp label="Monto ($)" type="number" value={modal.monto} onChange={e=>setModal({...modal,monto:e.target.value})}/>
+          <div style={{display:"flex",gap:10,marginTop:8}}>
+            <Btn variant="secondary" onClick={()=>setModal(null)} full>Cancelar</Btn>
+            <Btn variant="primary" onClick={guardar} full>Guardar</Btn>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // MAIN APP
 // ════════════════════════════════════════════════════════════════════════════
 const NAV=[
@@ -5319,6 +5454,7 @@ const NAV=[
     {id:"documentos",label:"Documentos",icon:I.file},
     {id:"reportes",label:"Reportes",icon:I.file},
     {id:"costoslote",label:"Costos x Lote",icon:I.dollar},
+    {id:"facturacion",label:"Facturación",icon:I.dollar},
     {id:"historial",label:"Historial",icon:I.history},
   ]},
   {group:"EQUIPO",items:[
@@ -5328,7 +5464,7 @@ const NAV=[
     {id:"config",label:"Configuración",icon:I.settings},
   ]},
 ];
-const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",reportes:"Reportes",costoslote:"Costos por Lote",historial:"Historial de Movimientos",colaboradores:"Colaboradores",config:"Configuración"};
+const TITLES={resumen:"Resumen Ejecutivo",campos:"Campos",animales:"Animales",campanas:"Campañas",lluvias:"Lluvias",stock:"Stock e Insumos",maquinaria:"Maquinaria",finanzas:"Gastos",ordenes:"Órdenes de Trabajo",documentos:"Documentos",reportes:"Reportes",costoslote:"Costos por Lote",facturacion:"Facturación",historial:"Historial de Movimientos",colaboradores:"Colaboradores",config:"Configuración"};
 
 const TopActions=({page,onAction,miRol})=>{
   const map={
@@ -5498,6 +5634,7 @@ export default function App(){
     documentos:<DocumentosPage {...props}/>,
     reportes:<ReportePage {...props}/>,
     costoslote:<CostosLotePage {...props}/>,
+    facturacion:<FacturacionPage {...props}/>,
     historial:<HistorialPage {...props}/>,
     colaboradores:<ColaboradoresPage {...props}/>,
     config:<ConfigPage {...props} setDolar={setDolar} onLogout={onLogout} user={user} logoUrl={logoUrl} setLogoUrl={setLogoUrl}/>,
