@@ -5129,8 +5129,9 @@ function _parseVentasGranos(texto, mapaLotes){
     if(cells.length<2) return;
     const nombre=cells[0];
     if(!nombre || !mapaLotes.has(nombre.toLowerCase())) return;
+    // El $ Ingresado es la ÚLTIMA columna: tomamos la última celda no vacía.
     let monto=0;
-    for(let i=cells.length-1;i>=1;i--){ const v=_parseMonto(cells[i]); if(v>0){monto=v;break;} }
+    for(let i=cells.length-1;i>=1;i--){ if(cells[i]!==""){ monto=_parseMonto(cells[i]); break; } }
     if(monto>0) acc[nombre]=(acc[nombre]||0)+monto;
   });
   return acc;
