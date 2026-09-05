@@ -310,6 +310,51 @@ async function gastoConsumoInsumo({orgId, fecha, stk, monto, orden, lotes, orige
   }
 }
 
+// Lista de tablas que componen el estado de la app.
+const TABLES = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores","miembros","notificaciones","movimientos"];
+
+// Descuenta del stock releyendo la cantidad actual de la base, no la del cache
+// del navegador (que puede estar vieja si otro usuario cargo movimientos).
+async function descontarStock(stk, cantidad){
+  const {data:actual} = await sb.from("stock").select("cantidad").eq("id",stk.id).maybeSingle();
+  const base = Number(actual?.cantidad ?? stk.cantidad ?? 0);
+  await sb.from("stock").update({cantidad:Math.max(0, base - Number(cantidad))}).eq("id",stk.id);
+}
+
+// Completa las ordenes cuya fecha ya vencio: descuenta insumos y registra el gasto.
+// La orden se "reclama" con un UPDATE condicional ANTES de tocar el stock, asi dos
+// navegadores abiertos a la vez no descuentan ni facturan dos veces lo mismo.
+// Devuelve true si completo alguna.
+async function autoCompletarOrdenes(orgId, snapshot){
+  const hoy = todayISO();
+  const pendientes = (snapshot.ordenes||[]).filter(
+    o => o.estado==="Pendiente" && o.fecha && o.fecha<=hoy && !o.insumos_aplicados
+  );
+  let algunaCompletada = false;
+  for(const o of pendientes){
+    const {data:reclamada, error:errRec} = await sb.from("ordenes")
+      .update({estado:"Completada", insumos_aplicados:true})
+      .eq("id", o.id)
+      .not("insumos_aplicados","is",true)
+      .select("id");
+    if(errRec){ console.error("No se pudo reclamar la orden", o.id, errRec); continue; }
+    if(!reclamada || reclamada.length===0) continue; // otro cliente la tomo primero
+    algunaCompletada = true;
+
+    const lotes = lotesDeOrden(o, snapshot.campos);
+    for(const ins of (o.insumos_usados||[])){
+      const stk = (snapshot.stock||[]).find(s=>s.id===ins.stock_id);
+      if(!stk) continue;
+      await descontarStock(stk, ins.cantidad);
+      const monto = Number(ins.cantidad)*Number(stk.costo_unit||0);
+      if(monto>0){
+        await gastoConsumoInsumo({orgId, fecha:hoy, stk, monto, orden:o, lotes, origen:"orden_auto"});
+      }
+    }
+  }
+  return algunaCompletada;
+}
+
 // 📎 Sube un remito/factura a Storage y lo archiva en Documentos.
 // Devuelve la URL pública o lanza error.
 async function archivarComprobante(orgId, file, { nombre, tag = "Remitos" } = {}) {
@@ -3736,19 +3781,30 @@ function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
   };
 
   const completarManual = async (orden)=>{
+    // Reclamo atomico primero: si otro usuario ya la completo, este UPDATE no
+    // devuelve filas y cortamos, en vez de descontar el stock por segunda vez.
+    const {data:reclamada, error:errRec} = await sb.from("ordenes")
+      .update({estado:"Completada", insumos_aplicados:true})
+      .eq("id", orden.id)
+      .not("insumos_aplicados","is",true)
+      .select("id");
+    if(errRec){ toast(errRec.message,"error"); return; }
+    if(!reclamada || reclamada.length===0){
+      toast("Esa orden ya fue completada por otro usuario","error");
+      reload();
+      return;
+    }
     // El costo de los insumos usados se atribuye al/los lote(s) de la orden
     const lotes = lotesDeOrden(orden, data.campos);
     for(const ins of (orden.insumos_usados||[])){
       const stk = data.stock.find(s=>s.id===ins.stock_id);
-      if(stk){
-        await sb.from("stock").update({cantidad:Math.max(0,Number(stk.cantidad)-Number(ins.cantidad))}).eq("id",stk.id);
-        const monto = Number(ins.cantidad)*Number(stk.costo_unit||0);
-        if(monto>0){
-          await gastoConsumoInsumo({orgId,fecha:todayISO(),stk,monto,orden,lotes,origen:"orden"});
-        }
+      if(!stk) continue;
+      await descontarStock(stk, ins.cantidad);
+      const monto = Number(ins.cantidad)*Number(stk.costo_unit||0);
+      if(monto>0){
+        await gastoConsumoInsumo({orgId,fecha:todayISO(),stk,monto,orden,lotes,origen:"orden"});
       }
     }
-    await sb.from("ordenes").update({estado:"Completada",insumos_aplicados:true}).eq("id",orden.id);
     toast(lotes.length?`Orden completada · costo imputado a ${lotes.join(", ")}`:"Orden completada y stock descontado");
     reload();
   };
@@ -5548,55 +5604,76 @@ export default function App(){
   },[user]);
 
   // LOAD DATA
-  const reload = useCallback(async ()=>{
+  // Trae solo las tablas pedidas.
+  const fetchTables = useCallback(async (list)=>{
+    const results = await Promise.all(list.map(t=>sb.from(t).select("*").eq("org_id",orgId)));
+    const out = {};
+    list.forEach((t,i)=>{ out[t] = results[i].data || []; });
+    return out;
+  },[orgId]);
+
+  const loadConfig = useCallback(async ()=>{
     if(!orgId) return;
-    const tables = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores","miembros","notificaciones","movimientos"];
-    const results = await Promise.all(tables.map(t=>sb.from(t).select("*").eq("org_id",orgId)));
-    const newData = {};
-    tables.forEach((t,i)=>{newData[t]=results[i].data||[];});
-    setData(newData);
     const {data:cfg} = await sb.from("config").select("*").eq("org_id",orgId).maybeSingle();
     if(cfg){
       setDolar(Number(cfg.dolar_oficial)||1420);
       setLogoUrl(cfg.logo || LOGO_URL);
     }
-
-    // Auto-complete orders past deadline
-    const today = todayISO();
-    const pending = (newData.ordenes||[]).filter(o=>o.estado==="Pendiente"&&o.fecha&&o.fecha<=today&&!o.insumos_aplicados);
-    for(const o of pending){
-      const lotesO = lotesDeOrden(o, newData.campos);
-      for(const ins of (o.insumos_usados||[])){
-        const stk = newData.stock.find(s=>s.id===ins.stock_id);
-        if(stk){
-          await sb.from("stock").update({cantidad:Math.max(0,Number(stk.cantidad)-Number(ins.cantidad))}).eq("id",stk.id);
-          const monto = Number(ins.cantidad)*Number(stk.costo_unit||0);
-          if(monto>0){
-            await gastoConsumoInsumo({orgId,fecha:today,stk,monto,orden:o,lotes:lotesO,origen:"orden_auto"});
-          }
-        }
-      }
-      await sb.from("ordenes").update({estado:"Completada",insumos_aplicados:true}).eq("id",o.id);
-    }
-    if(pending.length>0){
-      // Reload after auto-completing
-      const results2 = await Promise.all(tables.map(t=>sb.from(t).select("*").eq("org_id",orgId)));
-      const newData2 = {};
-      tables.forEach((t,i)=>{newData2[t]=results2[i].data||[];});
-      setData(newData2);
-    }
   },[orgId]);
+
+  // Recarga parcial: mezcla solo las tablas que cambiaron, sin pisar el resto.
+  const reloadTables = useCallback(async (list)=>{
+    if(!orgId || !list.length) return;
+    const tabs = list.filter(t=>TABLES.includes(t));
+    if(tabs.length){
+      const parcial = await fetchTables(tabs);
+      setData(prev=>({...prev, ...parcial}));
+    }
+    if(list.includes("config")) await loadConfig();
+  },[orgId,fetchTables,loadConfig]);
+
+  // Recarga completa (login, cambio de org, acciones que tocan muchas tablas).
+  const reload = useCallback(async ()=>{
+    if(!orgId) return;
+    const nuevo = await fetchTables(TABLES);
+    setData(nuevo);
+    await loadConfig();
+
+    // Auto-completar ordenes vencidas. Solo lo corre quien puede editar: un
+    // Lector abriendo la app no debe escribir en la base.
+    if(!canEdit(miRol)) return;
+    try{
+      const hubo = await autoCompletarOrdenes(orgId, nuevo);
+      if(hubo){
+        const post = await fetchTables(["ordenes","stock","finanzas","movimientos"]);
+        setData(prev=>({...prev, ...post}));
+      }
+    }catch(e){ console.error("Auto-completar ordenes fallo:", e); }
+  },[orgId,miRol,fetchTables,loadConfig]);
 
   useEffect(()=>{reload();},[reload]);
 
-  // Realtime subscriptions
+  // Realtime: en vez de recargar las 13 tablas ante cualquier cambio, anota que
+  // tablas cambiaron y recarga solo esas, agrupando los eventos de ~700ms.
+  const dirtyRef = useRef(new Set());
+  const debounceRef = useRef(null);
   useEffect(()=>{
     if(!orgId) return;
-    const ch = sb.channel("changes")
-      .on("postgres_changes",{event:"*",schema:"public"},()=>reload())
+    const ch = sb.channel(`changes-${orgId}`)
+      .on("postgres_changes",{event:"*",schema:"public"},payload=>{
+        const t = payload?.table;
+        if(!t || (!TABLES.includes(t) && t!=="config")) return;
+        dirtyRef.current.add(t);
+        clearTimeout(debounceRef.current);
+        debounceRef.current = setTimeout(()=>{
+          const lista = [...dirtyRef.current];
+          dirtyRef.current.clear();
+          reloadTables(lista);
+        }, 700);
+      })
       .subscribe();
-    return ()=>sb.removeChannel(ch);
-  },[orgId,reload]);
+    return ()=>{ clearTimeout(debounceRef.current); sb.removeChannel(ch); };
+  },[orgId,reloadTables]);
 
   const toast=useCallback((msg,type="success")=>{
     setToastMsg({msg,type});
@@ -5750,4 +5827,4 @@ export default function App(){
       <Toast msg={toastMsg?.msg} type={toastMsg?.type}/>
     </div>
   );
-} 
+}
