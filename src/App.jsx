@@ -313,9 +313,16 @@ async function gastoConsumoInsumo({orgId, fecha, stk, monto, orden, lotes, orige
 // Lista de tablas que componen el estado de la app.
 const TABLES = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores","miembros","notificaciones","movimientos"];
 
-// Descuenta del stock releyendo la cantidad actual de la base, no la del cache
-// del navegador (que puede estar vieja si otro usuario cargo movimientos).
+// Descuenta del stock con una sola operacion atomica en la base
+// (funcion descontar_stock, creada en Supabase). Asi, si dos personas descuentan
+// el mismo insumo en el mismo instante, no se pierde ninguna de las dos restas.
+// Una cantidad negativa devuelve stock (se usa al reeditar una orden ya aplicada).
 async function descontarStock(stk, cantidad){
+  const {error} = await sb.rpc("descontar_stock",{p_stock_id:stk.id, p_cantidad:Number(cantidad)});
+  if(!error) return;
+  // Si la funcion todavia no existe en la base, seguimos con el metodo viejo
+  // para no dejar el stock sin actualizar.
+  console.error("descontar_stock no disponible, uso el metodo anterior:", error);
   const {data:actual} = await sb.from("stock").select("cantidad").eq("id",stk.id).maybeSingle();
   const base = Number(actual?.cantidad ?? stk.cantidad ?? 0);
   await sb.from("stock").update({cantidad:Math.max(0, base - Number(cantidad))}).eq("id",stk.id);
@@ -3779,11 +3786,11 @@ function OrdenesPage({data,orgId,toast,reload,modalReq,clearModal}){
         // Revert old, apply new
         for(const oi of oldInsumos){
           const stk = data.stock.find(s=>s.id===oi.stock_id);
-          if(stk) await sb.from("stock").update({cantidad:Number(stk.cantidad)+Number(oi.cantidad)}).eq("id",stk.id);
+          if(stk) await descontarStock(stk, -Number(oi.cantidad)); // negativo = devuelve al stock
         }
         for(const ni of (row.insumos_usados||[])){
           const stk = data.stock.find(s=>s.id===ni.stock_id);
-          if(stk) await sb.from("stock").update({cantidad:Math.max(0,Number(stk.cantidad)-Number(ni.cantidad))}).eq("id",stk.id);
+          if(stk) await descontarStock(stk, Number(ni.cantidad));
         }
       }
       toast("Orden actualizada");
