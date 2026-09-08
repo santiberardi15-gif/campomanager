@@ -21,6 +21,24 @@ const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_KEY;
 
 const sb = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+// Registra el service worker (public/sw.js): guarda la app en el dispositivo
+// para que abra al instante y no dependa de la señal para mostrar la pantalla.
+// Los datos siguen viniendo de Supabase; esto solo cachea la app en sí.
+if (typeof navigator !== "undefined" && "serviceWorker" in navigator) {
+  const yaTeniaControlador = !!navigator.serviceWorker.controller;
+  let recargando = false;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(e => console.error("Service worker:", e));
+  });
+  // Cuando se publica una version nueva, el service worker toma el control y
+  // recargamos una sola vez para que el usuario vea los cambios enseguida.
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!yaTeniaControlador || recargando) return;
+    recargando = true;
+    window.location.reload();
+  });
+}
+
 // 🛰️ Copernicus Data Space (Sentinel-2): imágenes satelitales recientes + NDVI.
 // Crear una "configuración" en https://shapps.dataspace.copernicus.eu/dashboard/
 // con capas TRUE-COLOR y NDVI, y poner el Instance ID en .env como VITE_SENTINEL_INSTANCE_ID.
