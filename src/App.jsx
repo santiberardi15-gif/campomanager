@@ -450,6 +450,21 @@ const ROLE_BADGE = {
   Lector: {bg:"#f3f4f6",c:"#6b7280"},
 };
 
+// Detecta pantalla chica (celular). Se usa para el menu lateral, los paddings
+// y el alto real de la ventana en el navegador del telefono.
+const MOBILE_Q = "(max-width: 820px)";
+function useIsMobile(){
+  const [m,setM] = useState(()=> typeof window!=="undefined" && window.matchMedia(MOBILE_Q).matches);
+  useEffect(()=>{
+    const mq = window.matchMedia(MOBILE_Q);
+    const on = e=>setM(e.matches);
+    mq.addEventListener("change",on);
+    setM(mq.matches);
+    return ()=>mq.removeEventListener("change",on);
+  },[]);
+  return m;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // UI PRIMITIVES
 // ════════════════════════════════════════════════════════════════════════════
@@ -489,9 +504,9 @@ const Btn = ({children,variant="primary",onClick,small,full,style:s={},disabled}
 };
 
 const Modal = ({title,onClose,children,wide})=>(
-  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:1000,
+  <div className="cm-modal-bg" style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:1000,
     display:"flex",alignItems:"center",justifyContent:"center",padding:20}} onClick={onClose}>
-    <div style={{background:"#fff",borderRadius:16,padding:28,width:"100%",maxWidth:wide?720:520,
+    <div className="cm-modal" style={{background:"#fff",borderRadius:16,padding:28,width:"100%",maxWidth:wide?720:520,
       maxHeight:"88vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,0.2)"}}
       onClick={e=>e.stopPropagation()}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:22}}>
@@ -5566,6 +5581,12 @@ export default function App(){
   const [logoUrl,setLogoUrl]=useState(LOGO_URL);
   const [page,setPage]=useState("resumen");
   const [sidebarOpen,setSidebarOpen]=useState(true);
+  const isMobile = useIsMobile();
+  const [drawerOpen,setDrawerOpen]=useState(false);
+  // En el escritorio la barra se colapsa; en el celular es un cajon deslizable
+  // que siempre muestra los textos.
+  const navExpandido = isMobile ? true : sidebarOpen;
+  useEffect(()=>{ if(!isMobile) setDrawerOpen(false); },[isMobile]);
   const [toastMsg,setToastMsg]=useState(null);
   const [modalReq,setModalReq]=useState(null);
   const [notifOpen,setNotifOpen]=useState(false);
@@ -5737,7 +5758,7 @@ export default function App(){
   };
 
   return(
-    <div style={{display:"flex",height:"100vh",fontFamily:"'DM Sans','Segoe UI',system-ui,sans-serif",background:"#f5f5f0",overflow:"hidden"}}>
+    <div style={{display:"flex",height:"100dvh",fontFamily:"'DM Sans','Segoe UI',system-ui,sans-serif",background:"#f5f5f0",overflow:"hidden"}}>
       <style>{`
         *{box-sizing:border-box;margin:0;padding:0;}
         body{margin:0;}
@@ -5746,23 +5767,40 @@ export default function App(){
         ::-webkit-scrollbar-thumb{background:#d1d5db;border-radius:3px;}
         button:hover{opacity:.85;}
         input:focus,select:focus,textarea:focus{border-color:#16a34a!important;outline:none;box-shadow:0 0 0 3px #16a34a18;}
+
+        /* ── CELULAR ─────────────────────────────────────────────────────── */
+        @media (max-width: 820px){
+          /* Formularios de 2 columnas pasan a 1 */
+          div[style*="grid-template-columns: 1fr 1fr"],
+          div[style*="grid-template-columns:1fr 1fr"]{ grid-template-columns:1fr !important; }
+          /* Las tablas scrollean solas en vez de romper el ancho de la pantalla */
+          table{ display:block; overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap; }
+          /* Modales casi a pantalla completa, pegados abajo (mas comodo con el pulgar) */
+          .cm-modal-bg{ padding:8px !important; align-items:flex-end !important; }
+          .cm-modal{ padding:18px !important; max-height:92dvh !important; }
+          /* iOS hace zoom solo si la letra del campo mide menos de 16px */
+          input,select,textarea{ font-size:16px !important; }
+        }
       `}</style>
 
-      <div style={{width:sidebarOpen?232:58,minWidth:sidebarOpen?232:58,background:"#fff",borderRight:"1px solid #e5e7eb",display:"flex",flexDirection:"column",transition:"width .25s",overflow:"hidden",boxShadow:"2px 0 8px rgba(0,0,0,0.04)",zIndex:10}}>
+      {isMobile&&drawerOpen&&<div onClick={()=>setDrawerOpen(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:900}}/>}
+      <div style={isMobile
+        ? {position:"fixed",top:0,left:0,bottom:0,width:250,background:"#fff",borderRight:"1px solid #e5e7eb",display:"flex",flexDirection:"column",transform:drawerOpen?"translateX(0)":"translateX(-100%)",transition:"transform .25s",overflow:"hidden",boxShadow:"2px 0 16px rgba(0,0,0,0.15)",zIndex:901}
+        : {width:sidebarOpen?232:58,minWidth:sidebarOpen?232:58,background:"#fff",borderRight:"1px solid #e5e7eb",display:"flex",flexDirection:"column",transition:"width .25s",overflow:"hidden",boxShadow:"2px 0 8px rgba(0,0,0,0.04)",zIndex:10}}>
         <div style={{padding:"14px 12px",borderBottom:"1px solid #f3f4f6",display:"flex",alignItems:"center",gap:10}}>
           <div style={{width:36,height:36,borderRadius:10,background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden",border:"1px solid #f3f4f6"}}><img src={logoUrl} alt="Logo" style={{width:"100%",height:"100%",objectFit:"contain"}}/></div>
-          {sidebarOpen&&<div><div style={{fontSize:10,color:"#9ca3af",lineHeight:1}}>Control operativo</div><div style={{fontWeight:800,fontSize:14}}>Campo Manager</div></div>}
+          {navExpandido&&<div><div style={{fontSize:10,color:"#9ca3af",lineHeight:1}}>Control operativo</div><div style={{fontWeight:800,fontSize:14}}>Campo Manager</div></div>}
         </div>
         <div style={{flex:1,overflowY:"auto",padding:"6px 0"}}>
           {NAV_VISIBLE.map(g=>(
             <div key={g.group}>
-              {sidebarOpen&&<div style={{fontSize:10,fontWeight:700,color:"#9ca3af",padding:"10px 14px 3px",letterSpacing:1}}>{g.group}</div>}
+              {navExpandido&&<div style={{fontSize:10,fontWeight:700,color:"#9ca3af",padding:"10px 14px 3px",letterSpacing:1}}>{g.group}</div>}
               {g.items.map(it=>{
                 const active=page===it.id;
                 return(
-                  <button key={it.id} onClick={()=>{setPage(it.id);setModalReq(null);}} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:sidebarOpen?"8px 14px":"8px 18px",border:"none",cursor:"pointer",background:active?"#f0fdf4":"transparent",color:active?"#16a34a":"#374151",borderLeft:active?"3px solid #16a34a":"3px solid transparent",justifyContent:sidebarOpen?"flex-start":"center"}}>
+                  <button key={it.id} onClick={()=>{setPage(it.id);setModalReq(null);if(isMobile)setDrawerOpen(false);}} style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:navExpandido?"10px 14px":"8px 18px",border:"none",cursor:"pointer",background:active?"#f0fdf4":"transparent",color:active?"#16a34a":"#374151",borderLeft:active?"3px solid #16a34a":"3px solid transparent",justifyContent:navExpandido?"flex-start":"center"}}>
                     <div style={{color:active?"#16a34a":"#6b7280",flexShrink:0}}><it.icon/></div>
-                    {sidebarOpen&&<span style={{fontSize:13,fontWeight:active?700:500,whiteSpace:"nowrap"}}>{it.label}</span>}
+                    {navExpandido&&<span style={{fontSize:13,fontWeight:active?700:500,whiteSpace:"nowrap"}}>{it.label}</span>}
                   </button>
                 );
               })}
@@ -5770,22 +5808,25 @@ export default function App(){
           ))}
         </div>
         <div style={{borderTop:"1px solid #f3f4f6",padding:"12px"}}>
-          {sidebarOpen&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+          {navExpandido&&<div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
             <div style={{width:32,height:32,borderRadius:"50%",background:"#16a34a",display:"flex",alignItems:"center",justifyContent:"center",color:"#fff",fontWeight:800,fontSize:13,flexShrink:0}}>{user?.email?.[0]?.toUpperCase()}</div>
             <div style={{minWidth:0,flex:1}}>
               <div style={{fontSize:12,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user?.email}</div>
               <div style={{fontSize:10,color:"#16a34a",fontWeight:600}}>{miRol||"Cargando..."}</div>
             </div>
           </div>}
-          <button onClick={()=>setSidebarOpen(o=>!o)} style={{width:"100%",padding:"7px",borderRadius:8,border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:"#6b7280",fontSize:12}}>
-            <I.menu/>{sidebarOpen&&"Colapsar"}
+          <button onClick={()=>isMobile?setDrawerOpen(false):setSidebarOpen(o=>!o)} style={{width:"100%",padding:"9px",borderRadius:8,border:"1px solid #e5e7eb",background:"#f9fafb",cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8,color:"#6b7280",fontSize:12}}>
+            {isMobile?<><I.x/>Cerrar menú</>:<><I.menu/>{sidebarOpen&&"Colapsar"}</>}
           </button>
         </div>
       </div>
 
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-        <div style={{background:"#fff",borderBottom:"1px solid #e5e7eb",padding:"0 24px",height:58,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,gap:8}}>
-          <h1 style={{fontSize:18,fontWeight:800}}>{TITLES[page]}</h1>
+        <div style={{background:"#fff",borderBottom:"1px solid #e5e7eb",padding:isMobile?"0 12px":"0 24px",height:58,display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0,gap:8}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+            {isMobile&&<button onClick={()=>setDrawerOpen(true)} aria-label="Abrir menú" style={{background:"none",border:"none",cursor:"pointer",color:"#374151",padding:4,display:"flex",flexShrink:0}}><I.menu/></button>}
+            <h1 style={{fontSize:isMobile?15:18,fontWeight:800,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{TITLES[page]}</h1>
+          </div>
           <div style={{display:"flex",alignItems:"center",gap:12}}>
             <TopActions page={page} onAction={handleAction} miRol={miRol}/>
             <div style={{position:"relative"}}>
@@ -5813,7 +5854,7 @@ export default function App(){
             </div>
           </div>
         </div>
-        <div style={{flex:1,overflowY:"auto",padding:24}}>
+        <div style={{flex:1,overflowY:"auto",padding:isMobile?12:24,WebkitOverflowScrolling:"touch"}}>
           {miRol===ROLES.LECTOR&&(
             <div style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#92400e",display:"flex",alignItems:"center",gap:8}}>
               👁️ Estás en modo <b>Lector</b>: podés ver todo pero no editar. Si necesitás cargar datos, pedile al administrador que te cambie el rol.
