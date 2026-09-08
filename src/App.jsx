@@ -328,6 +328,44 @@ async function gastoConsumoInsumo({orgId, fecha, stk, monto, orden, lotes, orige
   }
 }
 
+// ── Copia local de los datos, para poder abrir la app sin señal ────────────
+// Guarda una foto de lo ultimo que se cargo bien. No reemplaza a la base:
+// sirve para consultar en el campo cuando no hay internet.
+const CACHE_KEY = "campomanager_cache_v1";
+
+function guardarCache(userId, payload){
+  if(!userId) return;
+  const escribir = obj => localStorage.setItem(CACHE_KEY+"_"+userId, JSON.stringify(obj));
+  const sello = new Date().toISOString();
+  try{
+    escribir({...payload, guardadoEn:sello});
+  }catch(e){
+    // El navegador da ~5 MB. Si no entra, guardamos sin el historial largo.
+    try{
+      escribir({...payload, data:{...payload.data, finanzas:[], movimientos:[]}, guardadoEn:sello, recortado:true});
+    }catch(e2){ console.warn("No se pudo guardar la copia local:", e2); }
+  }
+}
+
+function leerCache(userId){
+  if(!userId) return null;
+  try{
+    const raw = localStorage.getItem(CACHE_KEY+"_"+userId);
+    return raw ? JSON.parse(raw) : null;
+  }catch(e){ return null; }
+}
+
+// ¿El dispositivo dice tener red? En modo avión esto da false al instante.
+// Es clave preguntarlo ANTES de consultar: sin red, la consulta puede quedar
+// colgada para siempre en vez de fallar, y la app se queda esperando.
+const hayRed = () => typeof navigator === "undefined" || navigator.onLine !== false;
+
+function fmtFechaHora(iso){
+  try{
+    return new Date(iso).toLocaleString("es-AR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+  }catch(e){ return ""; }
+}
+
 // Lista de tablas que componen el estado de la app.
 const TABLES = ["campos","stock","animales","campanas","maquinaria","lluvias","finanzas","ordenes","documentos","colaboradores","miembros","notificaciones","movimientos"];
 
@@ -5597,6 +5635,8 @@ export default function App(){
   const [session,setSession]=useState(null);
   const [user,setUser]=useState(null);
   const [orgId,setOrgId]=useState(null);
+  const [sinConexion,setSinConexion]=useState(()=>!hayRed());
+  const [datosDe,setDatosDe]=useState(null);
   const [miRol,setMiRol]=useState(null);
   const [miMiembroId,setMiMiembroId]=useState(null);
   const [loadingAuth,setLoadingAuth]=useState(true);
@@ -5615,6 +5655,15 @@ export default function App(){
   const [toastMsg,setToastMsg]=useState(null);
   const [modalReq,setModalReq]=useState(null);
   const [notifOpen,setNotifOpen]=useState(false);
+
+  // Referencias al valor actual, para poder guardar la copia local sin meter
+  // estas variables en las dependencias (haria que la carga se repita sola).
+  const userIdRef = useRef(null); userIdRef.current = user?.id || null;
+  const dolarRef  = useRef(dolar); dolarRef.current = dolar;
+  const logoRef   = useRef(logoUrl); logoRef.current = logoUrl;
+  const rolRef    = useRef(miRol); rolRef.current = miRol;
+  const miembroRef= useRef(miMiembroId); miembroRef.current = miMiembroId;
+  const dataRef   = useRef(data); dataRef.current = data;
 
   // AUTH
   useEffect(()=>{
@@ -5639,28 +5688,63 @@ export default function App(){
   // LOAD ORG
   useEffect(()=>{
     if(!user) return;
+
+    // 1) Primero pintamos lo ultimo guardado. Asi la app arranca al instante y
+    //    sigue siendo usable aunque no haya señal.
+    const copia = leerCache(user.id);
+    if(copia?.orgId){
+      setOrgId(copia.orgId);
+      setMiRol(copia.miRol);
+      setMiMiembroId(copia.miMiembroId);
+      if(copia.data) setData(prev=>({...prev, ...copia.data}));
+      if(copia.dolar) setDolar(copia.dolar);
+      if(copia.logoUrl) setLogoUrl(copia.logoUrl);
+      setDatosDe(copia.guardadoEn||null);
+    }
+
+    // 2) Despues confirmamos contra la base, si hay red.
+    if(!hayRed()){ setSinConexion(true); return; }
     (async ()=>{
-      const {data:mem}=await sb.from("miembros").select("id,org_id,rol").eq("user_id",user.id).limit(1).maybeSingle();
+      let mem=null, error=null;
+      try{
+        const r = await sb.from("miembros").select("id,org_id,rol").eq("user_id",user.id).limit(1).maybeSingle();
+        mem = r.data; error = r.error;
+      }catch(e){ error = e; }
       if(mem){
         setOrgId(mem.org_id);
         setMiRol(mem.rol);
         setMiMiembroId(mem.id);
+      } else if(error){
+        setSinConexion(true);
       }
     })();
   },[user]);
 
   // LOAD DATA
   // Trae solo las tablas pedidas.
+  // Devuelve tambien si alguna consulta fallo. Es clave: sin esto, quedarse sin
+  // señal devolvia listas vacias y borraba de la pantalla todo el campo.
   const fetchTables = useCallback(async (list)=>{
-    const results = await Promise.all(list.map(t=>sb.from(t).select("*").eq("org_id",orgId)));
-    const out = {};
-    list.forEach((t,i)=>{ out[t] = results[i].data || []; });
-    return out;
+    const out = {}; let huboError = false;
+    try{
+      const results = await Promise.all(list.map(t=>sb.from(t).select("*").eq("org_id",orgId)));
+      list.forEach((t,i)=>{
+        if(results[i].error) huboError = true;
+        out[t] = results[i].data || [];
+      });
+    }catch(e){
+      // Sin señal la promesa puede rechazarse en vez de devolver un error.
+      huboError = true;
+      list.forEach(t=>{ out[t] = []; });
+    }
+    return {datos:out, huboError};
   },[orgId]);
 
   const loadConfig = useCallback(async ()=>{
     if(!orgId) return;
-    const {data:cfg} = await sb.from("config").select("*").eq("org_id",orgId).maybeSingle();
+    let cfg = null;
+    try{ cfg = (await sb.from("config").select("*").eq("org_id",orgId).maybeSingle()).data; }
+    catch(e){ return; }
     if(cfg){
       setDolar(Number(cfg.dolar_oficial)||1420);
       setLogoUrl(cfg.logo || LOGO_URL);
@@ -5670,10 +5754,15 @@ export default function App(){
   // Recarga parcial: mezcla solo las tablas que cambiaron, sin pisar el resto.
   const reloadTables = useCallback(async (list)=>{
     if(!orgId || !list.length) return;
+    if(!hayRed()){ setSinConexion(true); return; }
     const tabs = list.filter(t=>TABLES.includes(t));
     if(tabs.length){
-      const parcial = await fetchTables(tabs);
-      setData(prev=>({...prev, ...parcial}));
+      const {datos, huboError} = await fetchTables(tabs);
+      if(huboError){ setSinConexion(true); return; }
+      const unido = {...dataRef.current, ...datos};
+      setData(unido);
+      guardarCache(userIdRef.current, {orgId, miRol:rolRef.current, miMiembroId:miembroRef.current,
+        data:unido, dolar:dolarRef.current, logoUrl:logoRef.current});
     }
     if(list.includes("config")) await loadConfig();
   },[orgId,fetchTables,loadConfig]);
@@ -5681,9 +5770,18 @@ export default function App(){
   // Recarga completa (login, cambio de org, acciones que tocan muchas tablas).
   const reload = useCallback(async ()=>{
     if(!orgId) return;
-    const nuevo = await fetchTables(TABLES);
+    if(!hayRed()){ setSinConexion(true); return; }
+    const {datos:nuevo, huboError} = await fetchTables(TABLES);
+    if(huboError){
+      setSinConexion(true);
+      return;
+    }
+    setSinConexion(false);
     setData(nuevo);
+    setDatosDe(new Date().toISOString());
     await loadConfig();
+    guardarCache(userIdRef.current, {orgId, miRol:rolRef.current, miMiembroId:miembroRef.current,
+      data:nuevo, dolar:dolarRef.current, logoUrl:logoRef.current});
 
     // Auto-completar ordenes vencidas. Solo lo corre quien puede editar: un
     // Lector abriendo la app no debe escribir en la base.
@@ -5691,8 +5789,8 @@ export default function App(){
     try{
       const hubo = await autoCompletarOrdenes(orgId, nuevo);
       if(hubo){
-        const post = await fetchTables(["ordenes","stock","finanzas","movimientos"]);
-        setData(prev=>({...prev, ...post}));
+        const {datos:post, huboError:e2} = await fetchTables(["ordenes","stock","finanzas","movimientos"]);
+        if(!e2) setData(prev=>({...prev, ...post}));
       }
     }catch(e){ console.error("Auto-completar ordenes fallo:", e); }
   },[orgId,miRol,fetchTables,loadConfig]);
@@ -5720,6 +5818,18 @@ export default function App(){
       .subscribe();
     return ()=>{ clearTimeout(debounceRef.current); sb.removeChannel(ch); };
   },[orgId,reloadTables]);
+
+  // Cuando el telefono pierde o recupera señal, nos enteramos enseguida.
+  useEffect(()=>{
+    const alVolver = ()=>{ setSinConexion(false); reload(); };
+    const alCaer   = ()=>setSinConexion(true);
+    window.addEventListener("online", alVolver);
+    window.addEventListener("offline", alCaer);
+    return ()=>{
+      window.removeEventListener("online", alVolver);
+      window.removeEventListener("offline", alCaer);
+    };
+  },[reload]);
 
   const toast=useCallback((msg,type="success")=>{
     setToastMsg({msg,type});
@@ -5754,7 +5864,10 @@ export default function App(){
   if(needsPassword) return <SetPasswordScreen onDone={()=>{ setNeedsPassword(false); window.location.reload(); }}/>;
   if(!orgId) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:10}}>
     <Spinner/>
-    <div>Cargando tu organización...</div>
+    <div>{sinConexion?"Sin conexión":"Cargando tu organización..."}</div>
+    {sinConexion&&<div style={{maxWidth:320,textAlign:"center",fontSize:13,color:"#6b7280",lineHeight:1.5}}>
+      No hay datos guardados en este dispositivo todavía. Abrí la app una vez con señal y después va a funcionar sin internet.
+    </div>}
     <Btn variant="ghost" small onClick={onLogout}>Cerrar sesión</Btn>
   </div>;
 
@@ -5880,6 +5993,12 @@ export default function App(){
           </div>
         </div>
         <div style={{flex:1,overflowY:"auto",padding:isMobile?12:24,WebkitOverflowScrolling:"touch"}}>
+          {sinConexion&&(
+            <div style={{background:"#fef3c7",border:"1px solid #fcd34d",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#92400e",display:"flex",alignItems:"center",gap:8}}>
+              <span style={{fontSize:16}}>📴</span>
+              <span>Sin conexión — estás viendo los datos guardados{datosDe?` el ${fmtFechaHora(datosDe)}`:""}. Podés consultar todo, pero no cargar ni modificar hasta que vuelva la señal.</span>
+            </div>
+          )}
           {miRol===ROLES.LECTOR&&(
             <div style={{background:"#fef9c3",border:"1px solid #fde68a",borderRadius:10,padding:"10px 16px",marginBottom:16,fontSize:13,color:"#92400e",display:"flex",alignItems:"center",gap:8}}>
               👁️ Estás en modo <b>Lector</b>: podés ver todo pero no editar. Si necesitás cargar datos, pedile al administrador que te cambie el rol.
