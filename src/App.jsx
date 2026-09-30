@@ -3348,7 +3348,9 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
     };
   });
 
-  const mayor=filtered.length?Math.max(...filtered.map(l=>Number(l.mm||0))):0;
+  // Mayor evento DEL AÑO ELEGIDO (antes miraba todos los años y mostraba lluvias de años anteriores)
+  const mayorReg=lluviasAnio.reduce((best,l)=>(!best||Number(l.mm||0)>Number(best.mm||0))?l:best,null);
+  const mayor=mayorReg?Number(mayorReg.mm||0):0;
   const esteMesTotal=filtered.filter(l=>{if(!l.fecha)return false;const d=fechaLocal(l.fecha);return d.getMonth()===m&&d.getFullYear()===y;}).reduce((s,l)=>s+Number(l.mm||0),0);
   const esteMes = esTodos ? Math.round(esteMesTotal/nTotalCampos) : esteMesTotal;
 
@@ -3470,7 +3472,7 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
           : <KPI label={esTodos?`Prom. ${meses2[mesSel]} (campos)`:`Acumulado ${meses2[mesSel]}`} value={`${acumMes} mm`} icon={<I.rain/>}/>
         }
         <KPI label={esTodos?"Este mes (prom. campos)":"Este mes"} value={`${esteMes} mm`} icon={<I.cloud/>}/>
-        <KPI label="Mayor evento" value={`${mayor} mm`} icon={<I.warn/>}/>
+        <KPI label={`Mayor evento ${anioSel}`} value={`${mayor} mm`} sub={mayorReg?`${fmtDate(mayorReg.fecha)}${esTodos?` · ${mayorReg.campo}`:""}`:undefined} icon={<I.warn/>}/>
       </div>
 
       <div style={{background:"#fff",borderRadius:14,padding:20,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.07)"}}>
