@@ -298,7 +298,11 @@ const fmtK = n => {
   return fmt(v);
 };
 const fmtUSD = (n, dolar) => "U$ " + (Number(n||0)/dolar).toLocaleString("es-AR", {maximumFractionDigits:0});
-const todayISO = () => new Date().toISOString().split("T")[0];
+// Fecha de HOY en hora local (antes usaba UTC: después de las 21 hs daba el día siguiente)
+const todayISO = () => { const d=new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+// Lee "AAAA-MM-DD" como fecha LOCAL (mediodía). new Date("2026-08-01") la toma como UTC
+// y en Argentina queda 31/07 21 hs → la lluvia/gasto del día 1 caía en el mes anterior.
+const fechaLocal = s => !s ? null : new Date(String(s).length===10 ? s+"T12:00:00" : s);
 
 // Total de cabezas de un rodeo incluyendo crías al pie (terneros + terneras)
 const cabezasTotales = a => Number(a.cabezas||0)+Number(a.terneros||0)+Number(a.terneras||0);
@@ -764,7 +768,7 @@ function ResumenPage({data,dolar,setPage,sinGastos}){
   //    Con un campo filtrado = el acumulado de ese campo.
   const lluviasAnio = lluvias.filter(l=>{
     if(!l.fecha) return false;
-    return new Date(l.fecha).getFullYear()===y;
+    return fechaLocal(l.fecha).getFullYear()===y;
   });
   const lluviaAcumTotal = lluviasAnio.reduce((s,l)=>s+Number(l.mm||0),0);
   const camposConLluvia = [...new Set(lluviasAnio.map(l=>l.campo))].filter(Boolean).length;
@@ -781,7 +785,7 @@ function ResumenPage({data,dolar,setPage,sinGastos}){
   const flujo = meses.map(m2=>{
     const eg = finanzas.filter(f=>{
       if(!f.fecha) return false;
-      const d=new Date(f.fecha);
+      const d=fechaLocal(f.fecha);
       return `${d.getFullYear()}-${d.getMonth()}`===m2.key;
     }).reduce((s,f)=>s+Number(f.monto||0),0);
     return {mes:m2.label,egresos:eg};
@@ -791,7 +795,7 @@ function ResumenPage({data,dolar,setPage,sinGastos}){
   const meses2=["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"];
   const lluviaM = meses2.map((mes,idx)=>({
     mes,
-    mm:lluvias.filter(l=>{if(!l.fecha)return false;const d=new Date(l.fecha);return d.getMonth()===idx&&d.getFullYear()===y;}).reduce((s,l)=>s+Number(l.mm||0),0)
+    mm:lluvias.filter(l=>{if(!l.fecha)return false;const d=fechaLocal(l.fecha);return d.getMonth()===idx&&d.getFullYear()===y;}).reduce((s,l)=>s+Number(l.mm||0),0)
   }));
 
   const proxOrdenes = ordenes.filter(o=>o.estado==="Pendiente").sort((a,b)=>(a.fecha||"").localeCompare(b.fecha||"")).slice(0,5);
@@ -2817,7 +2821,7 @@ function StockPage({data,orgId,toast,reload,modalReq,clearModal,dolar,sinGastos}
                       </div>
                     </td>
                     <td style={{padding:"12px",fontSize:13,color:"#6b7280"}}>{s.ubicacion}</td>
-                    <td style={{padding:"12px",fontSize:12,color:s.fecha_llegada&&new Date(s.fecha_llegada)>new Date()?"#1d4ed8":"#9ca3af",whiteSpace:"nowrap"}}>
+                    <td style={{padding:"12px",fontSize:12,color:s.fecha_llegada&&fechaLocal(s.fecha_llegada)>new Date()?"#1d4ed8":"#9ca3af",whiteSpace:"nowrap"}}>
                       {s.fecha_llegada ? <span title="Fecha estimada de llegada">🚚 {fmtDate(s.fecha_llegada)}</span> : "—"}
                     </td>
                     <td style={{padding:"12px"}}>
@@ -3312,7 +3316,7 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
   const nTotalCampos = todosCampos.length || 1;
 
   // ── VISTA ANUAL ──
-  const lluviasAnio = filtered.filter(l=>l.fecha && new Date(l.fecha).getFullYear()===anioSel);
+  const lluviasAnio = filtered.filter(l=>l.fecha && fechaLocal(l.fecha).getFullYear()===anioSel);
   const acumAnioTotal = lluviasAnio.reduce((s,l)=>s+Number(l.mm||0),0);
   const nCampos = [...new Set(lluviasAnio.map(l=>l.campo))].filter(Boolean).length;
   const acumAnual = esTodos ? Math.round(acumAnioTotal/nTotalCampos) : acumAnioTotal;
@@ -3321,17 +3325,17 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
     mes,
     mm: esTodos
       ? Math.round(
-          todosCampos.reduce((s,c)=>s+data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===idx&&new Date(l.fecha).getFullYear()===anioSel).reduce((ss,l)=>ss+Number(l.mm||0),0),0)
+          todosCampos.reduce((s,c)=>s+data.lluvias.filter(l=>l.campo===c&&l.fecha&&fechaLocal(l.fecha).getMonth()===idx&&fechaLocal(l.fecha).getFullYear()===anioSel).reduce((ss,l)=>ss+Number(l.mm||0),0),0)
           / nTotalCampos
         )
-      : filtered.filter(l=>l.fecha&&new Date(l.fecha).getMonth()===idx&&new Date(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)
+      : filtered.filter(l=>l.fecha&&fechaLocal(l.fecha).getMonth()===idx&&fechaLocal(l.fecha).getFullYear()===anioSel).reduce((s,l)=>s+Number(l.mm||0),0)
   }));
 
   // ── VISTA MENSUAL ──
   const diasDelMes = new Date(anioSel, mesSel+1, 0).getDate();
-  const lluviasMes = filtered.filter(l=>l.fecha&&new Date(l.fecha).getMonth()===mesSel&&new Date(l.fecha).getFullYear()===anioSel);
+  const lluviasMes = filtered.filter(l=>l.fecha&&fechaLocal(l.fecha).getMonth()===mesSel&&fechaLocal(l.fecha).getFullYear()===anioSel);
   const acumMes = esTodos
-    ? Math.round(todosCampos.reduce((s,c)=>s+data.lluvias.filter(l=>l.campo===c&&l.fecha&&new Date(l.fecha).getMonth()===mesSel&&new Date(l.fecha).getFullYear()===anioSel).reduce((ss,l)=>ss+Number(l.mm||0),0),0) / nTotalCampos)
+    ? Math.round(todosCampos.reduce((s,c)=>s+data.lluvias.filter(l=>l.campo===c&&l.fecha&&fechaLocal(l.fecha).getMonth()===mesSel&&fechaLocal(l.fecha).getFullYear()===anioSel).reduce((ss,l)=>ss+Number(l.mm||0),0),0) / nTotalCampos)
     : lluviasMes.reduce((s,l)=>s+Number(l.mm||0),0);
   const lluviaMDias = Array.from({length:diasDelMes},(_,i)=>{
     const dia=i+1;
@@ -3345,10 +3349,11 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
   });
 
   const mayor=filtered.length?Math.max(...filtered.map(l=>Number(l.mm||0))):0;
-  const esteMes=filtered.filter(l=>{if(!l.fecha)return false;const d=new Date(l.fecha);return d.getMonth()===m&&d.getFullYear()===y;}).reduce((s,l)=>s+Number(l.mm||0),0);
+  const esteMesTotal=filtered.filter(l=>{if(!l.fecha)return false;const d=fechaLocal(l.fecha);return d.getMonth()===m&&d.getFullYear()===y;}).reduce((s,l)=>s+Number(l.mm||0),0);
+  const esteMes = esTodos ? Math.round(esteMesTotal/nTotalCampos) : esteMesTotal;
 
   // años disponibles
-  const anios=[...new Set(data.lluvias.map(l=>l.fecha&&new Date(l.fecha).getFullYear()).filter(Boolean))].sort((a,b)=>b-a);
+  const anios=[...new Set(data.lluvias.map(l=>l.fecha&&fechaLocal(l.fecha).getFullYear()).filter(Boolean))].sort((a,b)=>b-a);
   if(!anios.includes(y)) anios.unshift(y);
 
   const save = async ()=>{
@@ -3464,7 +3469,7 @@ function LluviasPage({data,orgId,toast,reload,modalReq,clearModal}){
           ? <KPI label={esTodos?"Prom. anual (campos)":"Acumulado anual"} value={`${acumAnual} mm`} sub={esTodos&&nCampos>0?`promedio de ${nCampos} campo(s)`:undefined} icon={<I.rain/>}/>
           : <KPI label={esTodos?`Prom. ${meses2[mesSel]} (campos)`:`Acumulado ${meses2[mesSel]}`} value={`${acumMes} mm`} icon={<I.rain/>}/>
         }
-        <KPI label="Este mes" value={`${esteMes} mm`} icon={<I.cloud/>}/>
+        <KPI label={esTodos?"Este mes (prom. campos)":"Este mes"} value={`${esteMes} mm`} icon={<I.cloud/>}/>
         <KPI label="Mayor evento" value={`${mayor} mm`} icon={<I.warn/>}/>
       </div>
 
@@ -4135,7 +4140,7 @@ function FinanzasPage({data,orgId,toast,reload,modalReq,clearModal,dolar}){
   }
   const flujo = meses.map(m2=>({
     mes:m2.label,
-    egresos:data.finanzas.filter(f=>{if(!f.fecha)return false;const d=new Date(f.fecha);return `${d.getFullYear()}-${d.getMonth()}`===m2.key;}).reduce((s,f)=>s+Number(f.monto||0),0)
+    egresos:data.finanzas.filter(f=>{if(!f.fecha)return false;const d=fechaLocal(f.fecha);return `${d.getFullYear()}-${d.getMonth()}`===m2.key;}).reduce((s,f)=>s+Number(f.monto||0),0)
   }));
 
   return(
@@ -5850,7 +5855,7 @@ export default function App(){
     ...notifsBD,
     ...data.stock.filter(s=>Number(s.cantidad)<Number(s.minimo)).map(s=>({tipo:"warn",msg:`Stock bajo: ${s.nombre} (${s.cantidad} ${s.unidad})`,page:"stock"})),
     ...data.ordenes.filter(o=>o.estado==="Pendiente"&&o.fecha&&o.fecha<=todayISO()).map(o=>({tipo:"warn",msg:`Orden vencida: ${o.titulo}`,page:"ordenes"})),
-    ...data.ordenes.filter(o=>{if(o.estado!=="Pendiente"||!o.fecha)return false;const d=new Date(o.fecha);const h=new Date();const diff=(d-h)/(1000*60*60*24);return diff>0&&diff<=3;}).map(o=>({tipo:"info",msg:`Próxima: ${o.titulo} (${fmtDate(o.fecha)})`,page:"ordenes"})),
+    ...data.ordenes.filter(o=>{if(o.estado!=="Pendiente"||!o.fecha)return false;const d=fechaLocal(o.fecha);const h=new Date();const diff=(d-h)/(1000*60*60*24);return diff>0&&diff<=3;}).map(o=>({tipo:"info",msg:`Próxima: ${o.titulo} (${fmtDate(o.fecha)})`,page:"ordenes"})),
   ];
 
   const marcarNotifLeida = async (id)=>{
